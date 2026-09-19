@@ -50,8 +50,10 @@ import type {
  *   function_call / function_call_output blocks are REJECTED. Historical tool
  *   calls and tool results are therefore textified with marker tags, and
  *   multi-round tool follow-ups use the same textified backfill.
- * - tool_choice only accepts "auto" / "none" (object/required forms rejected
- *   in thinking mode).
+ * - tool_choice: "auto" / "none" / "required" are accepted (required verified
+ *   2026-09-19, returns function_call output); the named form
+ *   { type: "function", name } is REJECTED with a stable 500 ("服务繁忙"),
+ *   so it is never sent.
  * - reasoning: { effort: "none" } disables thinking; { effort: "high" } enables it.
  */
 export class ResponsesApi extends CommonApi<ResponsesInputMessage, Record<string, unknown>> {
@@ -310,9 +312,13 @@ export class ResponsesApi extends CommonApi<ResponsesInputMessage, Record<string
             rb.tools = toolList;
         }
 
-        // tool_choice — only "auto" / "none" are accepted by SenseAudio
+        // tool_choice — "auto" / "none" / "required" accepted (required verified
+        // 2026-09-19); the named form { type: "function", name } returns a stable
+        // 500 ("服务繁忙"), so it is never sent — fall back to "auto".
         if (toolConfig.tool_choice === "none") {
             rb.tool_choice = "none";
+        } else if (toolConfig.tool_choice === "required") {
+            rb.tool_choice = "required";
         } else {
             rb.tool_choice = "auto";
         }
