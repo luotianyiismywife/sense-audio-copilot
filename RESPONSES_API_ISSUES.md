@@ -3,7 +3,7 @@
 > 本文档记录 SenseAudio 平台 `/v1/responses` 端点（Responses API 协议）在与官方 OpenAI Responses API 对比时发现的问题、实测现象、对插件的影响以及插件侧的应对措施。
 >
 > 信息来源：`test/api-tests.mjs` 三协议实测（2026-08-03）、生产排障记录（`.copilot/api-reference.md`）、`src/responses/responsesApi.ts` 实现注释、AGENTS.md 开发记录。
-> 最后更新：2026-08-25
+> 最后更新：2026-09-19（复测：`scripts/test-responses-recheck.mjs`）
 
 ---
 
@@ -12,7 +12,7 @@
 SenseAudio 的 `/v1/responses` 是一个**部分实现**的 Responses API：
 
 1. **拒绝 `function_call` / `function_call_output` 内容块** —— 多轮工具调用历史无法用标准结构化格式回填，只能"文本化"（`[tool_call]` / `[tool_result]` 标签），工具调用上下文质量受损；
-2. **`tool_choice` 仅接受 `auto` / `none`** —— 缺失 `required` 与"指定工具"两种模式，无法强制模型调用工具；
+2. **`tool_choice` 部分支持** —— **2026-09-19 复测：`required` 已支持（200，输出 `function_call`）**；但**指定工具形式 `{type:"function", name}` 稳定 500**（"服务繁忙"，与真实繁忙无关——同请求改 `auto`/`required` 均 200，4 次复测均 500）；
 3. **工具定义格式与自家 OpenAI 兼容端点不一致**（扁平 vs 嵌套），且**报错信息含糊**，不指出根因；
 4. **流式推理事件类型因模型而异**（qwen 系发 `reasoning_summary_text.delta`，deepseek 发 `reasoning_text.delta`），网关未统一转换；
 5. **端点整体仍在演进**，行为不稳定，插件默认不使用该协议（`senseaudio.enableResponsesApi` 默认关闭）。
@@ -32,7 +32,7 @@ OpenAI 的 Responses API（`POST /v1/responses`）是其新一代对话协议，
 | 内容块类型 `input_text` / `output_text` / `input_image` | ✅ | ✅ | 一致 |
 | 内容块类型 `function_call` / `function_call_output`（多轮工具历史） | ✅ | ❌ 拒绝 | **缺失** |
 | 工具定义（扁平格式 `{type, name, description, parameters}`） | ✅ | ✅ | 一致 |
-| `tool_choice`: `auto` / `none` / `required` / 指定工具 | ✅ | 仅 `auto` / `none` | **缺失** |
+| `tool_choice`: `auto` / `none` / `required` / 指定工具 | ✅ | `auto` / `none` / `required` ✅（2026-09-19 复测）；指定工具 `{type,name}` ❌ 稳定 500 | **部分缺失** |
 | 推理流式事件 `reasoning_summary_text.delta` / `reasoning_text.delta` | ✅（两种并存） | 因模型而异 | **不统一** |
 | usage 在 `response.completed` 事件返回 | ✅ | ✅ | 一致 |
 
@@ -79,18 +79,21 @@ user:      [tool_result] 晴天 25度 [/tool_result]
 - VS Code 的 `LanguageModelToolCallPart` / `LanguageModelToolResultPart` 生态围绕结构化消息设计，Responses 模式需要额外一层文本化转换，实现复杂度高于 OpenAI/Anthropic 模式；
 - 与插件自身其他模式行为不一致：OpenAI 模式用标准 `tool_calls` + `tool` role 回填，Anthropic 模式用 `tool_use` + `tool_result` 块回填，唯 Responses 模式是文本标记。
 
-### 3.2 🔴 P0：`tool_choice` 仅接受 `auto` / `none`
+### 3.2 🔴 P0：`tool_choice` 指定工具形式不可用
 
-**现象**
+**现象（2026-09-19 复测更新）**
 
-官方支持四种取值：`auto` / `none` / `required` / `{ "type": "function", "name": ... }`。SenseAudio 只接受前两种，**`required` 与对象形式在思考模式下被拒**。
+官方支持四种取值：`auto` / `none` / `required` / `{ "type": "function", "name": ... }`。
+
+- ✅ **`required` 已支持**（2026-09-19 复测 200，输出 `function_call`）——文档初版（2026-08-03）记录的"required 被拒"已修复；
+- ❌ **指定工具形式 `{type:"function", name:"get_weather"}` 稳定 500**（`{"code":"internal","message":"服务繁忙，请稍后再试","ref_code":500000}`）——4 次复测均 500，且同请求改 `auto`/`required` 均 200，确认是**指定工具形式专属错误**而非真实繁忙；
 
 **插件侧 workaround**：`prepareRequestBody` 固定发送 `tool_choice: "auto"`（`none` 仅在显式关闭时使用），放弃强制工具调用。
 
 **影响**：
 
-- 无法强制模型走工具流程（如"必须调用 `get_weather`"），依赖模型自主决策；
-- DeepSeek 等模型在 `auto` 下可能跳过工具直接作答，工具类任务（尤其视觉代理 `ask_image`）的成功率下降。
+- 无法指定模型必须调用某个具体工具（如"必须调用 `get_weather`"），依赖模型自主决策；
+- `required` 可用后，"强制走工具流程"的需求可部分满足（强制调用任意工具，但不能指定哪一个）。
 
 ### 3.3 🟡 P1：工具定义格式与自家 OpenAI 端点不一致，且报错信息含糊
 
@@ -149,8 +152,8 @@ AGENTS.md 与仓库记忆中的记录：
 |------|------------------------------|------------------------------|-------------|
 | `function_call` 内容块（多轮回填） | ✅ 支持 | ❌ 拒绝 | 文本化回填，工具历史结构化信息丢失 |
 | `function_call_output` 内容块 | ✅ 支持 | ❌ 拒绝 | 同上 |
-| `tool_choice = required` | ✅ 支持 | ❌ 拒绝 | 无法强制工具调用 |
-| `tool_choice = {type,name}` | ✅ 支持 | ❌ 拒绝 | 无法指定工具 |
+| `tool_choice = required` | ✅ 支持 | ✅ 支持（2026-09-19 复测） | 无 |
+| `tool_choice = {type,name}` | ✅ 支持 | ❌ 稳定 500（"服务繁忙"，非真实繁忙） | 无法指定工具 |
 | 工具定义格式 | 扁平 | 扁平（但与自家 OpenAI 端点不一致） | 需展平转换层 |
 | 工具格式报错 | — | 误导性报错（指向 schema 而非外层结构） | 排查成本高 |
 | 推理事件 | 两种官方事件并存 | 因模型而异（未统一） | 解析器需双监听 |
@@ -172,12 +175,12 @@ AGENTS.md 与仓库记忆中的记录：
 | 推理事件不统一 | 双监听 `reasoning_summary_text.delta` + `reasoning_text.delta` | `ResponsesApi.processResponsesEvent` |
 | 整体不稳定 | **默认关闭**（`enableResponsesApi=false`），auto 模式优先 OpenAI/Anthropic | `provider.ts`、`package.json` |
 
-> **结论性建议**：在平台补齐 3.1 / 3.2 两项（`function_call` 块 + `tool_choice` 完整支持）之前，**继续默认使用 OpenAI 兼容格式**。Responses 协议对 Copilot 场景的唯一价值是结构化工具调用，而该能力当前恰好是端点最薄弱的部分。
+> **结论性建议**：在平台补齐 3.1 / 3.2 两项（`function_call` 块 + `tool_choice` 指定工具形式）之前，**继续默认使用 OpenAI 兼容格式**。Responses 协议对 Copilot 场景的唯一价值是结构化工具调用，而该能力当前恰好是端点最薄弱的部分。
 
 ### 5.2 建议平台侧修复（按优先级）
 
 1. **支持 `function_call` / `function_call_output` 内容块**——这是 Responses 协议的工具调用核心，补齐后插件可移除文本化回填；
-2. **放开 `tool_choice` 至 `required` / 指定工具**——Agent 模式需要强制工具执行；
+2. **修复 `tool_choice` 指定工具形式的 500**——`required` 已支持（2026-09-19 复测），但 `{type:"function", name}` 形式稳定 500（报"服务繁忙"，实为参数校验/路由错误）；
 3. **统一推理事件类型**——网关层将各模型事件规范化为官方事件（或至少保证同一模型行为稳定）；
 4. **改进工具格式报错**——检测到嵌套格式时明确指出"工具定义需扁平格式 `{type, name, description, parameters}`"，而非报 schema 错误。
 
