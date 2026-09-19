@@ -65,6 +65,7 @@ export const REASON_TEXT: Record<string, string> = {
     server_error: "Server error (503)",
     api_error: "API error",
     unavailable: "Unavailable",
+    banned: "Account banned (billing frozen)",
 };
 
 /**

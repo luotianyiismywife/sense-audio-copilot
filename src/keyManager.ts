@@ -98,6 +98,9 @@ export function getRotationErrorPatterns(): string[] {
         "balance",
         "RATE_LIMITED",
         "UPSTREAM_RATE_LIMITED",
+        // 封号（计费账户被冻结）：400 + code=billing，2026-09-19 实测
+        "计费账户已被冻结",
+        "billing",
     ]);
 }
 
@@ -432,6 +435,7 @@ export function isTransientExhaustedReason(reason: string): boolean {
  * - 401 → "invalid"
  * - 429 / RATE_LIMITED → "rate_limited"
  * - 503 → "server_error"
+ * - 封号（code=billing / "计费账户已被冻结"，400，2026-09-19 实测）→ "banned"
  * - 其他（文本 patterns 命中的轮换错误）→ "api_error"
  */
 export function getKeyRotationReason(err: unknown): string {
@@ -448,6 +452,10 @@ export function getKeyRotationReason(err: unknown): string {
     if (message.includes("[503]") || message.includes("status 503")) {
         return "server_error";
     }
+    // 封号：400 + code=billing / "计费账户已被冻结"（确定性失败，持久化不可用）
+    if (message.includes("计费账户已被冻结") || message.includes("\"code\":\"billing\"") || message.includes("ref_code:400901") || message.includes("ref_code\":400901")) {
+        return "banned";
+    }
     return "api_error";
 }
 
@@ -455,7 +463,7 @@ export function getKeyRotationReason(err: unknown): string {
  * 获取 key 当前不可用的机器可读原因（供"全部 key 不可用"报错展示）：
  * - 瞬态冷却中（429/503）→ "rate_limited" / "server_error"
  * - 持久化不可用（available=false）→ "unavailable"
- * - 其他（未检测 / 余额不足 / cookie 预检跳过）→ "balance"
+ * - 其他（未检测 / 余额不足 / 封号 / cookie 预检跳过）→ "balance"
  */
 export function getKeyUnavailableReason(entry: ApiKeyEntry): string {
     const transient = getTransientExhaustedInfo(entry.value);
