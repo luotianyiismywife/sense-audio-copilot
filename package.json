@@ -23,7 +23,7 @@
 	"bugs": {
 		"url": "https://github.com/luotianyiismywife/senseaudio-copilot/issues"
 	},
-	"version": "1.12.3",
+	"version": "1.0.0",
 	"engines": {
 		"vscode": "^1.116.0"
 	},
