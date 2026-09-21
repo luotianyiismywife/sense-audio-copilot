@@ -191,7 +191,7 @@
 				},
 				"senseaudio.commitModel": {
 					"type": "string",
-					"default": "deepseek-v4-flash",
+					"default": "glm-5.3-flash",
 					"description": "%config.commitModel.desc%"
 				},
 				"senseaudio.commitMessagePrompt": {
@@ -315,20 +315,14 @@
 					"type": "string",
 					"default": "kimi-k2.6",
 					"enum": [
-						"kimi-k2.5",
 						"kimi-k2.6",
-						"kimi-k2.7-code",
-						"qwen3.8-max",
-						"seed-2.1-turbo",
-						"seed-2.1-pro"
+						"senseaudio-vl-1.0-260319",
+						"senseaudio-vl-lite-1.0-260319"
 					],
 					"enumDescriptions": [
-						"%config.visionProxyModel.enum.kimi-k2.5.desc%",
 						"%config.visionProxyModel.enum.kimi-k2.6.desc%",
-						"%config.visionProxyModel.enum.kimi-k2.7-code.desc%",
-						"%config.visionProxyModel.enum.qwen3.8-max.desc%",
-						"%config.visionProxyModel.enum.seed-2.1-turbo.desc%",
-						"%config.visionProxyModel.enum.seed-2.1-pro.desc%"
+						"%config.visionProxyModel.enum.senseaudio-vl.desc%",
+						"%config.visionProxyModel.enum.senseaudio-vl-lite.desc%"
 					],
 					"editPresentation": "multilineText",
 					"description": "%config.visionProxyModel.desc%"

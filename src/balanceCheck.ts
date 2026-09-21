@@ -16,8 +16,8 @@ import type { ApiKeyEntry } from "./keyManager";
 const USAGE_SUMMARY_URL = "https://senseaudio.cn/api/usage-summary";
 const REQUEST_TIMEOUT_MS = 20_000;
 const DEFAULT_BASE_URL = "https://api.senseaudio.cn/v1/";
-/** 手动检测用的最小聊天请求模型 */
-const TEST_MODEL_ID = "deepseek-v4-flash";
+/** 手动检测用的最小聊天请求模型（deepseek-v4-flash 已下线，400 "模型未找到"，2026-09-19 实测） */
+const TEST_MODEL_ID = "deepseek-v4.1-flash";
 
 /**
  * 余额详情（GET /api/usage-summary 的 data 子集）。

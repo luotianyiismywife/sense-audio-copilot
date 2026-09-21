@@ -233,8 +233,9 @@ async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff
         prompts.push(truncatedDiff);
         const prompt = prompts.join("\n\n");
 
-        // Use model from config or default to deepseek-v4-flash
-        const commitModelId = config.get<string>("senseaudio.commitModel", "deepseek-v4-flash");
+        // Use model from config or default to glm-5.3-flash (deepseek-v4-flash is
+        // no longer available on the API — 400 "模型未找到", 2026-09-19 tested)
+        const commitModelId = config.get<string>("senseaudio.commitModel", "glm-5.3-flash");
         // Fetch full model config (apiMode, max_completion_tokens, extra, etc.)
         const selectedModel: SenseAudioModelItem = getBuiltInModelConfig(commitModelId) ?? { id: commitModelId, owned_by: "senseaudio" };
         // Commit messages are simple tasks — disable thinking to speed up generation.

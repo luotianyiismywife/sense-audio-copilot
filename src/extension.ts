@@ -184,12 +184,9 @@ export function activate(context: vscode.ExtensionContext) {
 
             // Capability descriptions matching the settings-page enum descriptions.
             const VISION_MODEL_DESC: Record<string, string> = {
-                "kimi-k2.5": l10n("Kimi K2.5 — vision-capable"),
                 "kimi-k2.6": l10n("Kimi K2.6 — vision-capable (default)"),
-                "kimi-k2.7-code": l10n("Kimi K2.7 Code — vision-capable, no temperature/top_p"),
-                "qwen3.8-max": l10n("Qwen3.8 Max — text + image input, 1M context"),
-                "seed-2.1-turbo": l10n("Seed 2.1 Turbo — vision-capable"),
-                "seed-2.1-pro": l10n("Seed 2.1 Pro — vision-capable"),
+                "senseaudio-vl-1.0-260319": l10n("SenseAudio-VL-1.0 — vision-language model"),
+                "senseaudio-vl-lite-1.0-260319": l10n("SenseAudio-VL-Lite-1.0 — lightweight vision-language model"),
             };
 
             interface VisionPick extends vscode.QuickPickItem {
