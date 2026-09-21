@@ -17,8 +17,11 @@ function buildVisionOptions(): vscode.LanguageModelChatRequestOptions {
     if (visionThinking) {
         options.modelOptions = { reasoning_effort: "high" };
     } else {
+        // reasoning_effort="disabled" is REJECTED by the API (400 "field ReasoningEffort
+        // invalid, should be one of: low, medium, high, xhigh, none", 2026-09-19 tested);
+        // the correct value is "none". thinking:{type:"disabled"} alone is also sufficient.
         options.modelOptions = {
-            reasoning_effort: "disabled",
+            reasoning_effort: "none",
             thinking: { type: "disabled" },
         };
     }
