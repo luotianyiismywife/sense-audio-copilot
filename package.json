@@ -2,7 +2,7 @@
 	"name": "senseaudio-copilot-provider",
 	"publisher": "luotianyiismywife",
 	"displayName": "SenseAudio Provider for Copilot",
-	"description": "[UNMAINTAINED] Integrate SenseAudio models into GitHub Copilot Chat. Platform promo ended & resale prices skyrocketed — see README for alternatives (amdtokenfactory / NVIDIA NIM).",
+	"description": "Integrate SenseAudio models into GitHub Copilot Chat.",
 	"keywords": [
 		"ai",
 		"chat",
