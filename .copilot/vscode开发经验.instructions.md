@@ -40,6 +40,28 @@ description: "Use when: 需要操作浏览器（市场上传/审核、GitHub Rel
 
 > ⚠️ **教训（2026-08-10 v1.6.3）**：市场上传的 reCAPTCHA 验证**必须能访问 google.com**。中国大陆网络下内置浏览器会报"无法连接到 reCAPTCHA 服务"（`google.com/recaptcha/api2/clr` 被 CSP `connect-src` 拦截 + `ERR_ABORTED`/`ERR_BLOCKED_BY_ORB`），**刷新无效**。此时应**改用外部浏览器（Chrome/Edge，配代理插件）手动上传**，或开代理后重试内置浏览器。
 
+> ⚠️⚠️ **VS Code 1.138 内置浏览器无法上传市场（2026-09-21 v1.0.0 发布实测）**：即使代理可达 google.com，内置浏览器仍无法完成市场上传，**双重限制**：
+> 1. **页面级 CSP 拦截**：marketplace 页面的 CSP `connect-src` 白名单无 google.com，reCAPTCHA 回调（`api2/clr`）被浏览器 CSP 硬拦。**可绕过**：CDP `Page.setBypassCSP`（`const cdp = await page.context().newCDPSession(page); await cdp.send('Page.setBypassCSP', { enabled: true });`）——验证有效，fetch google.com 不再被拦；但 **reload 后需重新设置**（CDP session 失效）。
+> 2. **reCAPTCHA iframe 网络层**：绕过 CSP 后 `api2/anchor`（widget 加载）仍持续 `ERR_ABORTED`——reCAPTCHA iframe 根本不渲染（页面无 google.com iframe），手动 `grecaptcha.render()` 能建 widget 但 `execute()` 拿不到 token（iframe 内部网络栈不受页面级 CDP 控制）。**此层无法绕过**。
+> 3. **结论**：内置浏览器上传市场这条路在 1.138 已死（此前版本可行，疑似 VS Code 更新引入更严格的 iframe 隔离）。**替代方案：Firefox Nightly + Marionette MCP**（见 1.2b）。
+
+### 1.2b Firefox Nightly + Marionette MCP 上传市场（✅ 已验证 2026-09-22 v1.0.0）
+
+> VS Code 内置浏览器无法上传市场时的替代方案。Firefox Nightly（`C:\Program Files\Firefox Nightly\firefox.exe`，157.0a1）无 CSP 限制，且可被 firefox-devtools MCP 控制。
+
+1. **以 Marionette 模式启动**（MCP 需要）：
+   ```powershell
+   Start-Process "C:\Program Files\Firefox Nightly\firefox.exe" -ArgumentList "--marionette", "--remote-debugging-port", "9222", "--new-window", "https://marketplace.visualstudio.com/manage/publishers/<publisherId>"
+   ```
+   注意：普通 Firefox 在运行时 MCP 会连错（`No Marionette listener on 127.0.0.1:2828`）——必须启动 Nightly 并带 `--marionette` 标志。
+2. **MCP 连接**：`list_pages` 确认连接，`evaluate_script` 检查登录态（`document.body.innerHTML.includes('azhe-hjm')`）。
+3. **上传流程**（全部用 `evaluate_script` JS 点击，微软系按钮事件绑定 JS click 会超时）：
+   - 点 New extension（直接可见时）或 More commands（窗口窄时折叠，`aria-label="More commands"`）→ 菜单弹出 → 点 New extension → 子菜单点 Visual Studio Code
+   - 上传对话框出现（`[role=dialog]` + `#file-upload`）
+   - **文件注入是死路**：`#file-upload` 隐藏（`offsetParent=null`），MCP 无 setInputFiles 等价物；显示它（改 style）后用户手动选择也不可靠
+   - **最终由用户手动完成文件选择 + reCAPTCHA + Upload**（Firefox 无 CSP 限制，reCAPTCHA 正常显示）
+4. **验证成功**：列表行出现 `SenseAudio Provider for Copilot Verifying 1.0.0 just now Public`。
+
 > ⚠️ **关键教训**：vsix 打包必须**包含 dependencies**！用 `npx vsce package`（**不要加 `--no-dependencies`**），否则插件装不上 node_modules，用户激活直接崩溃（报"命令未找到"）。打包后务必 `npx vsce ls` 确认 `node_modules/` 在包内。
 
 ### 1.3 GitHub Release 创建流程
