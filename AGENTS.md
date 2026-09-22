@@ -792,7 +792,7 @@ API 实现的抽象基类。
 处理普通文本内容，发射到进度报告器。
 
 #### `static prepareHeaders(apiKey, apiMode, customHeaders?): Record<string, string>`
-准备 HTTP 请求头。Anthropic 模式使用 `x-api-key`，OpenAI 模式使用 `Bearer` 令牌。
+准备 HTTP 请求头。Anthropic 模式使用 `x-api-key`，OpenAI 模式使用 `Bearer` 令牌。User-Agent 使用本项目真实的 `VersionManager.getUserAgent()`（`senseaudio-copilot/<版本> VSCode/<版本>`，2026-09-23 修复：原为上游遗留的伪装官方 SDK 假 UA `ai-sdk/openai-compatible/2.0.41 ... runtime/bun/1.3.11`）。
 
 ---
 

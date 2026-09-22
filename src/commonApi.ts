@@ -10,6 +10,7 @@ import {
 } from "vscode";
 import { SenseAudioModelItem } from "./types";
 import { tryParseJSONObject } from "./utils";
+import { VersionManager } from "./versionManager";
 import type { InterceptedToolCall, StoredImage } from "./vision/types";
 import { ASK_IMAGE_TOOL_NAME, ASK_WITH_MULTI_IMAGE_TOOL_NAME } from "./vision/types";
 
@@ -447,7 +448,7 @@ export abstract class CommonApi<TMessage, TRequestBody> {
     ): Record<string, string> {
         const headers: Record<string, string> = {
             "Content-Type": "application/json",
-            "User-Agent": "ai-sdk/openai-compatible/2.0.41 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.11",
+            "User-Agent": VersionManager.getUserAgent(),
             "Accept": "*/*",
             "Accept-Encoding": "gzip, deflate, br, zstd",
         };

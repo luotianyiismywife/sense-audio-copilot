@@ -6,7 +6,7 @@
 > - **Responses API（`/v1/responses`）问题分析见根目录 [`RESPONSES_API_ISSUES.md`](../RESPONSES_API_ISSUES.md)**（工具格式扁平化、拒绝 function_call 块、tool_choice 受限等）。
 >
 > 本文档记录 SenseAudio 平台的 API 地址信息，供扩展开发与调试参考。
-> 最后更新：2026-08-26
+> 最后更新：2026-09-23（Anthropic 端点全参数实测）
 
 ---
 
@@ -69,11 +69,15 @@ https://api.senseaudio.cn/v1
 
 | 规则 | 说明 |
 |------|------|
-| Anthropic 协议必带头 | `anthropic-version: 2023-06-01` + 必须传 `max_tokens` |
+| **Anthropic 端点认证头（2026-09-23 实测）** | **`x-api-key` 与 `Authorization: Bearer` 均可**（同请求仅带其一均 200，无认证头 401 `authentication_error`）；`anthropic-version` 头**非必需**（不带也 200）。官方文档写“所有接口均使用 Bearer Token”，但端点实际兼容标准 Anthropic SDK 的 `x-api-key`。**插件保持现状**（anthropic 模式发 `x-api-key` + `anthropic-version`，openai/responses 发 `Bearer`），无需改代码 |
+| Anthropic 协议必带头 | `anthropic-version: 2023-06-01`（实测非必需但建议保留）+ 必须传 `max_tokens` |
 | DeepSeek `tool_choice` | 传字符串 `none` / `auto` / `required`，**不要传对象形式** |
 | OpenAI 端点 `thinking` | 仅接受字符串语义：`{ type: "enabled" }` / `{ type: "auto" }`（自适应；`adaptive` 会被拒绝）/ `{ type: "disabled" }` |
-| Anthropic 端点 `thinking` | 已实测 `adaptive` / `disabled` 通过；`enabled` 未在测试中验证 |
-| **Anthropic 模式 temperature/top_p** | **仅与 `thinking: {type:"enabled"}` 冲突 → 400 "请求参数组合无效"**（2026-08-06 实测 4 组合：enabled+temp→400、enabled+top_p→400、adaptive+temp+top_p→200、disabled+temp→200；生产复现 `trace_201493fe`）。**判定结论（2026-08-26）：这是 Anthropic 标准协议行为，不是平台 bug**——Anthropic 官方文档（Thinking 页 *Limits and feature compatibility*）原文：*"On older models, the restriction applies only while thinking is on: `temperature` and `top_k` are incompatible with thinking, and `top_p` is allowed at values between 0.95 and 1"*。平台只是忠实执行了该标准（甚至比模型厂商更严格，见下）。**插件已修复：仅 thinking 强制 enabled 时跳过 temperature/top_p**（`src/anthropic/anthropicApi.ts` `prepareRequestBody`，adaptive/disabled 保留温度，top_k 恒保留）。**平台侧 3 个可改进点**：① 400 报错文案含糊（"请求参数组合无效"，不如 Anthropic 官方给出 "temperature is not supported with extended thinking" 语义），排障困难；② 与自家 OpenAI 端点行为不一致（OpenAI 端点实测 200 容忍忽略）；③ 文档未提示此约束 |
+| **Anthropic 端点 `thinking`** | **2026-09-23 全量复测（deepseek-v4-flash-0731）**：`enabled`（无 temp）→ 200 且输出 `thinking` 块；`enabled` + temperature → **200**（2026-08-06 的 400 冲突**已修复**）；`enabled` + temp + top_p → 200；`adaptive` → 200；`disabled` → 200。**插件可简化**：无需再跳过 temperature/top_p（但保留跳过逻辑无害） |
+| **Anthropic 端点 `tool_choice`（2026-09-23 实测）** | `auto`（对象形式）→ 200；`any` → 200（强制工具调用）；`none` → 200；**指定工具形式 `{type:"tool", name}` → 稳定 500**（“服务繁忙”，与 Responses 端点同款问题）。插件仅发 auto/any/none，正确 |
+| **Anthropic 端点图片输入（2026-09-23 实测）** | 视觉模型（glm-5.3-flash）base64 图片 → 200 正常识别；**非视觉模型（deepseek-v4-flash-0731）发图片 → 稳定 500**（“服务繁忙”，OpenAI/Responses 端点同款）——**非视觉模型不应直接发图片**，插件已通过 ask_image 代理规避 |
+| **Anthropic 端点其他参数（2026-09-23 实测）** | `top_k` → 200；`system` 字段 → 200；多轮 `tool_use`/`tool_result` 回填 → 200；历史 `thinking` 块回传 → 200；流式 SSE 事件（message_start/content_block_start/delta/stop）→ 标准 Anthropic 格式 |
+| **Anthropic 模式 temperature/top_p** | **2026-08-06 实测 4 组合：enabled+temp→400、enabled+top_p→400、adaptive+temp+top_p→200、disabled+temp→200；生产复现 `trace_201493fe`。2026-09-23 复测：enabled+temp→200、enabled+temp+top_p→200，冲突已修复**。判定结论（2026-08-26）：这是 Anthropic 标准协议行为，不是平台 bug——Anthropic 官方文档（Thinking 页 *Limits and feature compatibility*）原文：*"On older models, the restriction applies only while thinking is on: `temperature` and `top_k` are incompatible with thinking, and `top_p` is allowed at values between 0.95 and 1"*。**插件已修复：仅 thinking 强制 enabled 时跳过 temperature/top_p**（`src/anthropic/anthropicApi.ts` `prepareRequestBody`，adaptive/disabled 保留温度，top_k 恒保留）。**平台侧 3 个可改进点**：① 400 报错文案含糊（"请求参数组合无效"，不如 Anthropic 官方给出 "temperature is not supported with extended thinking" 语义），排障困难；② 与自家 OpenAI 端点行为不一致（OpenAI 端点实测 200 容忍忽略）；③ 文档未提示此约束（2026-09-23 复测该约束已消失） |
 | **DeepSeek 官方对 temperature+thinking 的立场** | **模型厂商官方认为二者不冲突**：① OpenAI 格式（official `/guides/thinking_mode`）：*"Thinking mode does not support the `temperature`, `top_p`, `presence_penalty`, or `frequency_penalty` parameters. Please note that, for compatibility with existing software, setting these parameters will not trigger an error but will also have no effect"*——**设置了不报错只不生效**；② Anthropic 兼容层（official `/guides/anthropic_api` 兼容表）：`temperature` **Fully Supported** (range 0.0~2.0)、`top_p` **Fully Supported**、`thinking` Supported (budget_tokens ignored)。**结论："deepseek thinking enabled 冲突"只在 Anthropic 协议形态下存在（Anthropic 标准要求拒绝），DeepSeek 官方自家端点两种格式均容忍。插件按协议形态适配即可，无需改代码** |
 | **Anthropic 协议建议** | **建议优先使用 OpenAI 兼容格式**：Anthropic 端点按 Anthropic 标准对部分组合更严格（如 thinking enabled + temperature → 400），OpenAI 端点容忍该组合（设置了不报错只不生效，与 DeepSeek 官方一致）。仅在明确需要 Anthropic 原生 Messages 格式时使用 |
 | 流式响应解析 | OpenAI SSE `choices[0].delta.content`；Anthropic 原生 Messages 流式事件。**两种协议不要混用解析器** |

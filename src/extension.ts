@@ -59,6 +59,23 @@ function formatBalanceDetailText(detail: BalanceDetail | undefined, minBalance: 
 }
 
 /**
+ * 按 cookie 去重查询余额详情（TTL 缓存）。
+ * 多个 key 可能共享同一 cookie，去重避免重复请求。返回与 keys 等长的数组（无 cookie/查询失败 → undefined）。
+ */
+async function fetchBalanceDetailsByCookie(
+    keys: ApiKeyEntry[],
+): Promise<(BalanceDetail | undefined)[]> {
+    const cookies = [...new Set(keys.map((k) => k.cookie).filter((c): c is string => !!c))];
+    const map = new Map<string, BalanceDetail | undefined>();
+    await Promise.all(
+        cookies.map(async (c) => {
+            map.set(c, await getBalanceDetailCached(c, getBalanceCheckIntervalSec()));
+        }),
+    );
+    return keys.map((k) => (k.cookie ? map.get(k.cookie) : undefined));
+}
+
+/**
  * 按 cookie 去重查询平台 API Key 列表（TTL 缓存）。
  * 多个 key 可能共享同一 cookie，去重避免重复请求。返回 cookie → 列表 的 Map。
  */
@@ -411,11 +428,11 @@ async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void
         if (store.keys.length === 0) {
             items.push({ label: l10n("No API keys configured"), kind: vscode.QuickPickItemKind.Separator });
         } else {
-            // Balance / platform-key display — DISABLED.
-            // SenseAudio 平台无 cookie 余额接口（/api/usage-summary 为旧平台专属），
-            // 不再查询余额与平台 Key 数量，仅显示可用性状态与 cookie 绑定标记。
-            const balanceDetails: (BalanceDetail | undefined)[] = store.keys.map(() => undefined);
-            const cookieToKeyList = new Map();
+            // Balance / platform-key display (via bound cookie).
+            // SenseAudio 平台支持 cookie 余额查询（/api/usage-summary）与平台 Key 列表
+            // （/api/api-keys，tr_session 认证），按 cookie 粒度 TTL 缓存查询。
+            const balanceDetails = await fetchBalanceDetailsByCookie(store.keys);
+            const cookieToKeyList = await fetchPlatformKeyListsByCookie(store.keys, getBalanceCheckIntervalSec());
             store.keys.forEach((entry, i) => {
                 const status = getKeyDisplayStatus(entry);
                 const transient = getTransientExhaustedInfo(entry.value);
@@ -631,10 +648,11 @@ async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void
             vscode.window.showInformationMessage(l10n("No API keys configured"));
             return undefined;
         }
-        // Balance / platform-key display — DISABLED (SenseAudio 无 cookie 余额接口)。
-        // Balance / platform-key display DISABLED (SenseAudio 平台无 cookie 余额接口).
-        const balanceDetails: (BalanceDetail | undefined)[] = store.keys.map(() => undefined);
-        const cookieToKeyList = new Map();
+        // Balance / platform-key display (via bound cookie).
+        // SenseAudio 平台支持 cookie 余额查询（/api/usage-summary）与平台 Key 列表
+        // （/api/api-keys，tr_session 认证），按 cookie 粒度 TTL 缓存查询。
+        const balanceDetails = await fetchBalanceDetailsByCookie(store.keys);
+        const cookieToKeyList = await fetchPlatformKeyListsByCookie(store.keys, getBalanceCheckIntervalSec());
         const picked = await vscode.window.showQuickPick(
             store.keys.map((entry, i) => {
                 const detail = entry.cookie ? balanceDetails[i] : undefined;
@@ -702,9 +720,11 @@ async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void
             const store = await getApiKeyStore(secrets);
             const items: (vscode.QuickPickItem & { action?: string; index?: number })[] = [];
 
-            // Balance / platform-key display — DISABLED (SenseAudio 无 cookie 余额接口)。
-            const balanceDetails: (BalanceDetail | undefined)[] = store.keys.map(() => undefined);
-            const cookieToKeyList = new Map();
+            // Balance / platform-key display (via bound cookie).
+            // SenseAudio 平台支持 cookie 余额查询（/api/usage-summary）与平台 Key 列表
+            // （/api/api-keys，tr_session 认证），按 cookie 粒度 TTL 缓存查询。
+            const balanceDetails = await fetchBalanceDetailsByCookie(store.keys);
+            const cookieToKeyList = await fetchPlatformKeyListsByCookie(store.keys, getBalanceCheckIntervalSec());
 
             // List all keys with their current status
             store.keys.forEach((entry, i) => {

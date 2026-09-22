@@ -3,7 +3,7 @@
 > 本文档记录 SenseAudio 平台 `/v1/responses` 端点（Responses API 协议）在与官方 OpenAI Responses API 对比时发现的问题、实测现象、对插件的影响以及插件侧的应对措施。
 >
 > 信息来源：`test/api-tests.mjs` 三协议实测（2026-08-03）、生产排障记录（`.copilot/api-reference.md`）、`src/responses/responsesApi.ts` 实现注释、AGENTS.md 开发记录。
-> 最后更新：2026-09-19（复测：`scripts/test-responses-recheck.mjs`）
+> 最后更新：2026-09-23（复测：Anthropic 端点同款问题确认 + 非视觉模型图片 500 全端点）
 
 ---
 
@@ -12,7 +12,7 @@
 SenseAudio 的 `/v1/responses` 是一个**部分实现**的 Responses API：
 
 1. **拒绝 `function_call` / `function_call_output` 内容块** —— 多轮工具调用历史无法用标准结构化格式回填，只能"文本化"（`[tool_call]` / `[tool_result]` 标签），工具调用上下文质量受损；
-2. **`tool_choice` 部分支持** —— **2026-09-19 复测：`required` 已支持（200，输出 `function_call`）**；但**指定工具形式 `{type:"function", name}` 稳定 500**（"服务繁忙"，与真实繁忙无关——同请求改 `auto`/`required` 均 200，4 次复测均 500）；
+2. **`tool_choice` 部分支持** —— **2026-09-19 复测：`required` 已支持（200，输出 `function_call`）**；但**指定工具形式 `{type:"function", name}` 稳定 500**（"服务繁忙"，与真实繁忙无关——同请求改 `auto`/`required` 均 200，4 次复测均 500）。**2026-09-23 补充：Anthropic 端点的指定工具形式 `{type:"tool", name}` 同样稳定 500**（同款报错 `ref_code:500000`），确认是网关层对"指定工具"路由的共性缺陷，非 Responses 端点专属；
 3. **工具定义格式与自家 OpenAI 兼容端点不一致**（扁平 vs 嵌套），且**报错信息含糊**，不指出根因；
 4. **流式推理事件类型因模型而异**（qwen 系发 `reasoning_summary_text.delta`，deepseek 发 `reasoning_text.delta`），网关未统一转换；
 5. **端点整体仍在演进**，行为不稳定，插件默认不使用该协议（`senseaudio.enableResponsesApi` 默认关闭）。
@@ -144,6 +144,14 @@ AGENTS.md 与仓库记忆中的记录：
 - 多轮工具调用参数拼接依赖 `function_call_arguments.delta` / `function_call_arguments.done` 事件，配合文本化回填后，多轮场景偶发工具调用丢失；
 - 图片输入受模型限制（`qwen3.8-max` 要求图片 ≥ 10x10 像素，1x1 测试图被拒）——此项属模型限制而非协议问题，但说明端点未对输入做模型侧适配说明。
 
+### 3.6 🟡 P1（2026-09-23 新增）：非视觉模型发图片 → 全端点稳定 500
+
+**现象**：非视觉模型（`deepseek-v4-flash-0731`）在三个端点（OpenAI/Anthropic/Responses）发图片（base64 或 URL）均稳定 500（"服务繁忙，请稍后再试"，`ref_code:500000`）；视觉模型（`glm-5.3-flash`）同请求 200 正常识别。
+
+**根因**：网关把请求路由到不支持视觉的模型后端，后端无法处理图片输入，报错被包装成含糊的 500 而非 400 "模型不支持视觉"。
+
+**插件侧应对**：非视觉模型通过 `ask_image` 工具代理机制处理图片（图片发给视觉模型而非原模型），已规避此问题。**注意**：测试时用 URL 图片源需选平台服务器可达的地址（国内 CDN 如 baidu.com；google.com 会被平台服务器拒连，同样报 500，易误判为协议问题）。
+
 ---
 
 ## 4. 官方标准 vs SenseAudio 对照表
@@ -153,7 +161,7 @@ AGENTS.md 与仓库记忆中的记录：
 | `function_call` 内容块（多轮回填） | ✅ 支持 | ❌ 拒绝 | 文本化回填，工具历史结构化信息丢失 |
 | `function_call_output` 内容块 | ✅ 支持 | ❌ 拒绝 | 同上 |
 | `tool_choice = required` | ✅ 支持 | ✅ 支持（2026-09-19 复测） | 无 |
-| `tool_choice = {type,name}` | ✅ 支持 | ❌ 稳定 500（"服务繁忙"，非真实繁忙） | 无法指定工具 |
+| `tool_choice = {type,name}` | ✅ 支持 | ❌ 稳定 500（"服务繁忙"，非真实繁忙）；**Anthropic 端点 `{type:"tool", name}` 同款 500（2026-09-23）** | 无法指定工具 |
 | 工具定义格式 | 扁平 | 扁平（但与自家 OpenAI 端点不一致） | 需展平转换层 |
 | 工具格式报错 | — | 误导性报错（指向 schema 而非外层结构） | 排查成本高 |
 | 推理事件 | 两种官方事件并存 | 因模型而异（未统一） | 解析器需双监听 |
