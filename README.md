@@ -11,6 +11,9 @@
 > [!IMPORTANT]
 > **This is not affiliated with, officially maintained by, or endorsed by SenseAudio.**
 
+> [!TIP]
+> **API keys available from the author.** The author sells SenseAudio API keys. Note that the SenseAudio platform does **not** support prompt cache hits, so your quota is consumed at full input-token cost on every request — it doesn't last as long as cache-enabled platforms.
+
 Integrate [SenseAudio](https://senseaudio.cn) models into GitHub Copilot Chat as a VS Code extension.
 
 ### Usage
@@ -155,6 +158,9 @@ AGPL-3.0 License. This project builds upon the architecture of [opencode-go-copi
 
 > [!IMPORTANT]
 > **本插件与 SenseAudio 无关，也未获得其官方维护或认可。**
+
+> [!TIP]
+> **作者有售 API Key。** 作者出售 SenseAudio API Key。注意：SenseAudio 平台**不支持缓存命中**（prompt cache），每次请求都按完整输入 Token 计费，额度不如支持缓存的平台耐用。
 
 将 [SenseAudio](https://senseaudio.cn) 模型集成到 GitHub Copilot Chat 的 VS Code 插件。
 

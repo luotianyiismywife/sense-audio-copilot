@@ -2,7 +2,7 @@
 	"name": "senseaudio-copilot-provider",
 	"publisher": "luotianyiismywife",
 	"displayName": "SenseAudio Provider for Copilot",
-	"description": "Integrate SenseAudio models into GitHub Copilot Chat.",
+	"description": "Integrate SenseAudio models into GitHub Copilot Chat. API keys available from the author (see README). Note: the platform has no prompt cache hits, so quota is consumed faster than cache-enabled platforms.",
 	"keywords": [
 		"ai",
 		"chat",
