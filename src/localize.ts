@@ -175,6 +175,20 @@ const zhCN: Record<string, string> = {
 	// extension.ts - Cookie 下可用 Key 数量展示（GET /api/api-keys）
 	"Platform keys: {0} / {1}": "平台 Key：{0} / {1}",
 	"Platform keys unknown": "平台 Key 数量未知",
+
+	// extension.ts - 登录 token 查询余额/套餐用量（platform.senseaudio.cn/api/user/self）
+	"Query Balance / Plan Usage": "查询余额 / 套餐用量",
+	"Enter the login PASETO token (F12 → Application → Local Storage → senseaudio.cn → user → state.token, valid 60 days)":
+		"输入登录 PASETO token（F12 → Application → Local Storage → senseaudio.cn → user → state.token，60 天有效）",
+	"Querying balance...": "正在查询余额...",
+	"Failed to query balance (token may be expired)": "余额查询失败（token 可能已失效）",
+	"Re-enter token": "重新输入 token",
+	"Voucher balance: ¥{0} ({1} vouchers)": "代金券余额：¥{0}（{1} 张）",
+	"Cash balance: ¥{0}": "现金余额：¥{0}",
+	"Extra usage: {0}": "额外用量：{0}",
+	"Extra usage enabled": "已开启",
+	"Extra usage disabled": "已关闭",
+	"{0}: {1} / {2} ({3}%), resets {4}": "{0}：{1} / {2}（{3}%），重置于 {4}",
 };
 
 /**

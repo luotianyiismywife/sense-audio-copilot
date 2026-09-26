@@ -922,6 +922,8 @@ single 模式（fallback=switch）下是否应因当前 key 不可用而自动�
 
 ### 4.7 `src/balanceCheck.ts`
 
+> ⚠️ **平台已改版（2026-09-23 实测）**：旧端点 `senseaudio.cn/api/usage-summary` 与 `/api/api-keys` **均已 404**（2026-08-24 实测还是 200）。用户中心已迁移为三域认证体系（`platform.senseaudio.cn/api/*` 用 Bearer PASETO token，插件只有 tr_session cookie 拿不到 token），套餐用量数据源变更为 `platform.senseaudio.cn/api/user/self` 的 `usage_infos`/`account_info` 字段。本模块查询会稳定失败并静默降级（返回 undefined，不阻塞请求，回退被动检测——余额不足时 API 返回 402 触发轮换）。详见 `.copilot/api-reference.md` 第 7 节。
+
 #### `getBalanceCheckEnabled(): boolean`
 读取 `senseaudio.balanceCheckEnabled`（默认 true）。
 
@@ -932,10 +934,10 @@ single 模式（fallback=switch）下是否应因当前 key 不可用而自动�
 读取余额查询缓存 TTL（秒，默认 60）。
 
 #### `interface BalanceDetail`
-`{ balanceCny, availableBalanceCny, expiringBalanceCny, nextExpiryAt }` — 余额详情（`/api/usage-summary` 的 data 子集，2026-08-15 实测确认字段存在）。平台余额分「充值」与「赠送（限时）」：`expiringBalanceCny` = 赠送余额（到期未用失效），`nextExpiryAt` = 最近到期时间（ISO 8601 UTC，无则 null）；**充值余额 = availableBalanceCny - expiringBalanceCny**。
+`{ balanceCny, availableBalanceCny, expiringBalanceCny, nextExpiryAt }` — 余额详情（旧 `/api/usage-summary` 的 data 子集，端点已 404）。平台余额分「充值」与「赠送（限时）」：`expiringBalanceCny` = 赠送余额（到期未用失效），`nextExpiryAt` = 最近到期时间（ISO 8601 UTC，无则 null）；**充值余额 = availableBalanceCny - expiringBalanceCny**。
 
 #### `queryBalanceDetail(cookie): Promise<BalanceDetail>`
-`GET https://senseaudio.cn/api/usage-summary`，头 `Cookie: tr_session=<value>`，20s 超时；返回完整余额详情（balanceCny / availableBalanceCny / expiringBalanceCny / nextExpiryAt）。**API 可能以字符串返回金额避免浮点精度问题，已强制 `Number()` 转换（`toNumber` 辅助），非法值兜底 0**（2026-08-14 修复：此前假设 number，API 改返回 string 后 `balance.toFixed()` 抛 "toFixed is not a function"）；401 抛"cookie 失效"。
+`GET https://senseaudio.cn/api/usage-summary`，头 `Cookie: tr_session=<value>`，20s 超时。**端点已 404（2026-09-23 平台改版），本函数稳定失败**，调用方静默降级。历史行为：API 可能以字符串返回金额，已强制 `Number()` 转换（`toNumber` 辅助）；401 抛"cookie 失效"。
 
 #### `queryAccountBalance(cookie): Promise<number>`
 委托 `queryBalanceDetail` 返回 `availableBalanceCny`（向后兼容）。
@@ -950,7 +952,7 @@ single 模式（fallback=switch）下是否应因当前 key 不可用而自动�
 `{ id, name, maskedKey, keyPrefix, status, lastUsedAt, createdAt }` — `GET /api/api-keys` 返回的 data 数组元素。`status` 为 `enabled`/`disabled`，`lastUsedAt` 可能为 null。
 
 #### `queryApiKeysByCookie(cookie): Promise<ApiKeyListItem[]>`
-`GET https://senseaudio.cn/api/api-keys`，头 `Cookie: tr_session=<value>`，20s 超时；返回 cookie 对应账号下的全部 API Key 列表。实测仅需 `tr_session`（与 `/api/usage-summary` 同认证，无 CSRF/反爬限制）；401 抛"cookie 失效"。
+`GET https://senseaudio.cn/api/api-keys`，头 `Cookie: tr_session=<value>`，20s 超时。**端点已 404（2026-09-23 平台改版），本函数稳定失败**，调用方静默降级。历史行为：仅需 `tr_session`（无 CSRF/反爬限制）；401 抛"cookie 失效"。
 
 #### `getApiKeysByCookieCached(cookie, ttlSec): Promise<ApiKeyListItem[] | undefined>`
 带 TTL 缓存的 API Key 列表查询（按 cookie 粒度）；查询失败返回 undefined（不抛错）。供管理界面展示 "平台 Key：N / 10"（`status==="enabled"` 的 key 数量 / 平台上限 10）。

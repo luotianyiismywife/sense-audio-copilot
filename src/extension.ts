@@ -33,6 +33,7 @@ import {
     getMinBalanceCny,
     formatExpiryDate,
     getApiKeysByCookieCached,
+    getAccountInfoCached,
     type BalanceDetail,
 } from "./balanceCheck";
 import { getVisionSupportedModelIds } from "./apiModelList";
@@ -61,18 +62,38 @@ function formatBalanceDetailText(detail: BalanceDetail | undefined, minBalance: 
 /**
  * 按 cookie 去重查询余额详情（TTL 缓存）。
  * 多个 key 可能共享同一 cookie，去重避免重复请求。返回与 keys 等长的数组（无 cookie/查询失败 → undefined）。
+ *
+ * 数据源（2026-09-26 切换）：登录 PASETO token 查 platform.senseaudio.cn/api/user/self
+ * （getAccountInfoCached）。旧 cookie 端点 /api/usage-summary 已 404，不再使用。
+ * AccountInfo → BalanceDetail 映射：
+ * - availableBalanceCny = 代金券可用 + 现金余额（代金券优先扣减，现金兜底）
+ * - expiringBalanceCny = 代金券可用部分（限时，到期失效）
+ * - nextExpiryAt = 最早代金券到期时间（epoch 秒 → ISO 8601 UTC）
+ * 无登录 token 或查询失败 → undefined（UI 显示 "余额未知"）。
  */
 async function fetchBalanceDetailsByCookie(
     keys: ApiKeyEntry[],
+    getLoginToken: () => string | undefined,
 ): Promise<(BalanceDetail | undefined)[]> {
-    const cookies = [...new Set(keys.map((k) => k.cookie).filter((c): c is string => !!c))];
-    const map = new Map<string, BalanceDetail | undefined>();
-    await Promise.all(
-        cookies.map(async (c) => {
-            map.set(c, await getBalanceDetailCached(c, getBalanceCheckIntervalSec()));
-        }),
-    );
-    return keys.map((k) => (k.cookie ? map.get(k.cookie) : undefined));
+    const token = getLoginToken();
+    if (!token) {
+        return keys.map(() => undefined);
+    }
+    const info = await getAccountInfoCached(token, getBalanceCheckIntervalSec());
+    if (!info) {
+        return keys.map(() => undefined);
+    }
+    const detail: BalanceDetail = {
+        balanceCny: info.voucherAvailableCny + info.balance,
+        availableBalanceCny: info.voucherAvailableCny + info.balance,
+        expiringBalanceCny: info.voucherAvailableCny,
+        nextExpiryAt:
+            info.earliestVoucherExpiry !== null && Number.isFinite(info.earliestVoucherExpiry)
+                ? new Date(info.earliestVoucherExpiry * 1000).toISOString()
+                : null,
+    };
+    // 所有 key 共享同一账号余额（余额按账号粒度，不按 key 粒度）
+    return keys.map(() => detail);
 }
 
 /**
@@ -414,6 +435,52 @@ export function activate(context: vscode.ExtensionContext) {
 async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void> {
     const secrets = context.secrets;
 
+    // 登录 PASETO token（60 天有效，查余额/套餐用量用）。
+    // 存在 globalState（非 SecretStorage——token 本身是短期凭证，且需跨窗口共享）。
+    const getLoginToken = (): string | undefined => context.globalState.get<string>("senseaudio.loginToken");
+    const setLoginToken = async (token: string | undefined): Promise<void> => {
+        await context.globalState.update("senseaudio.loginToken", token);
+    };
+
+    // ---- 查询余额/套餐用量流程（登录 token）----
+    const queryBalanceFlow = async (): Promise<void> => {
+        let token = getLoginToken();
+        if (!token) {
+            const input = await vscode.window.showInputBox({
+                title: l10n("Query Balance / Plan Usage"),
+                prompt: l10n("Enter the login PASETO token (F12 → Application → Local Storage → senseaudio.cn → user → state.token, valid 60 days)"),
+                ignoreFocusOut: true,
+                password: true,
+            });
+            if (!input?.trim()) {
+                return;
+            }
+            token = input.trim();
+            await setLoginToken(token);
+        }
+        const info = await vscode.window.withProgress(
+            { location: vscode.ProgressLocation.Notification, title: l10n("Querying balance...") },
+            () => getAccountInfoCached(token!, getBalanceCheckIntervalSec()),
+        );
+        if (!info) {
+            // 查询失败（token 失效/网络）→ 提示重新输入
+            const retry = await vscode.window.showWarningMessage(
+                l10n("Failed to query balance (token may be expired)"),
+                l10n("Re-enter token"),
+            );
+            if (retry) {
+                await setLoginToken(undefined);
+                await queryBalanceFlow();
+            }
+            return;
+        }
+        // 展示余额（与上游一致：只显示余额，不做套餐重置）
+        const lines: string[] = [];
+        lines.push(l10nFormat("Voucher balance: ¥{0} ({1} vouchers)", info.voucherAvailableCny.toFixed(2), String(info.vouchers.filter((v) => v.available > 0).length)));
+        lines.push(l10nFormat("Cash balance: ¥{0}", info.balance.toFixed(2)));
+        vscode.window.showInformationMessage(lines.join("\n"), { modal: true });
+    };
+
     const render = async (): Promise<vscode.QuickPickItem[] | undefined> => {
         const store = await getApiKeyStore(secrets);
         // "Set as Current" / ★ Current marker only make sense in single mode;
@@ -428,10 +495,10 @@ async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void
         if (store.keys.length === 0) {
             items.push({ label: l10n("No API keys configured"), kind: vscode.QuickPickItemKind.Separator });
         } else {
-            // Balance / platform-key display (via bound cookie).
-            // SenseAudio 平台支持 cookie 余额查询（/api/usage-summary）与平台 Key 列表
-            // （/api/api-keys，tr_session 认证），按 cookie 粒度 TTL 缓存查询。
-            const balanceDetails = await fetchBalanceDetailsByCookie(store.keys);
+            // Balance / platform-key display. Balance comes from the login
+            // token (platform.senseaudio.cn/api/user/self); platform-key count
+            // still uses the bound cookie (legacy endpoint, silently degrades).
+            const balanceDetails = await fetchBalanceDetailsByCookie(store.keys, getLoginToken);
             const cookieToKeyList = await fetchPlatformKeyListsByCookie(store.keys, getBalanceCheckIntervalSec());
             store.keys.forEach((entry, i) => {
                 const status = getKeyDisplayStatus(entry);
@@ -450,14 +517,12 @@ async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void
                 }
                 const isActive = isSingleMode && i === store.activeIndex;
                 const isPinned = isStickyMode && i === stickyCursor;
-                // Balance display: only meaningful when a cookie is bound. Query
-                // failure → "Balance unknown"; no cookie → no balance shown.
-                const detail = entry.cookie ? balanceDetails[i] : undefined;
+                // Balance display: from the login token (account-level). Query
+                // failure / no token → "Balance unknown".
+                const detail = balanceDetails[i];
                 const balanceText = detail
                     ? formatBalanceDetailText(detail, getMinBalanceCny())
-                    : entry.cookie
-                        ? `$(warning) ${l10n("Balance unknown")}`
-                        : "";
+                    : `$(warning) ${l10n("Balance unknown")}`;
                 // Platform key count: "平台 Key：N / 10" (enabled keys / limit).
                 // Query failure → "平台 Key 数量未知"; no cookie → not shown.
                 const platformKeysText = formatPlatformKeysText(entry.cookie, cookieToKeyList);
@@ -648,19 +713,16 @@ async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void
             vscode.window.showInformationMessage(l10n("No API keys configured"));
             return undefined;
         }
-        // Balance / platform-key display (via bound cookie).
-        // SenseAudio 平台支持 cookie 余额查询（/api/usage-summary）与平台 Key 列表
-        // （/api/api-keys，tr_session 认证），按 cookie 粒度 TTL 缓存查询。
-        const balanceDetails = await fetchBalanceDetailsByCookie(store.keys);
+        // Balance / platform-key display. Balance comes from the login token
+        // (account-level); platform-key count still uses the bound cookie.
+        const balanceDetails = await fetchBalanceDetailsByCookie(store.keys, getLoginToken);
         const cookieToKeyList = await fetchPlatformKeyListsByCookie(store.keys, getBalanceCheckIntervalSec());
         const picked = await vscode.window.showQuickPick(
             store.keys.map((entry, i) => {
-                const detail = entry.cookie ? balanceDetails[i] : undefined;
+                const detail = balanceDetails[i];
                 const balanceText = detail
                     ? formatBalanceDetailText(detail, getMinBalanceCny())
-                    : entry.cookie
-                        ? `$(warning) ${l10n("Balance unknown")}`
-                        : "";
+                    : `$(warning) ${l10n("Balance unknown")}`;
                 const platformKeysText = formatPlatformKeysText(entry.cookie, cookieToKeyList);
                 const desc = [
                     entry.cookie ? `$(key) ${maskCookie(entry.cookie)}` : undefined,
@@ -720,10 +782,9 @@ async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void
             const store = await getApiKeyStore(secrets);
             const items: (vscode.QuickPickItem & { action?: string; index?: number })[] = [];
 
-            // Balance / platform-key display (via bound cookie).
-            // SenseAudio 平台支持 cookie 余额查询（/api/usage-summary）与平台 Key 列表
-            // （/api/api-keys，tr_session 认证），按 cookie 粒度 TTL 缓存查询。
-            const balanceDetails = await fetchBalanceDetailsByCookie(store.keys);
+            // Balance / platform-key display. Balance comes from the login
+            // token (account-level); platform-key count still uses the cookie.
+            const balanceDetails = await fetchBalanceDetailsByCookie(store.keys, getLoginToken);
             const cookieToKeyList = await fetchPlatformKeyListsByCookie(store.keys, getBalanceCheckIntervalSec());
 
             // List all keys with their current status
@@ -733,12 +794,10 @@ async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void
                 if (status === "available") statusText = `$(check) ${l10n("Available")}`;
                 else if (status === "unavailable") statusText = `$(error) ${l10n("Unavailable")}`;
                 else if (status === "cooldown") statusText = `$(clock) ${l10n("Cooldown")}`;
-                const detail = entry.cookie ? balanceDetails[i] : undefined;
+                const detail = balanceDetails[i];
                 const balanceText = detail
                     ? formatBalanceDetailText(detail, getMinBalanceCny())
-                    : entry.cookie
-                        ? `$(warning) ${l10n("Balance unknown")}`
-                        : "";
+                    : `$(warning) ${l10n("Balance unknown")}`;
                 const platformKeysText = formatPlatformKeysText(entry.cookie, cookieToKeyList);
                 const statusLine = [statusText, balanceText, platformKeysText].filter(Boolean).join("  ·  ");
                 items.push({
@@ -751,6 +810,7 @@ async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void
 
             items.push({ label: "", kind: vscode.QuickPickItemKind.Separator });
             items.push({ label: `$(beaker) ${l10n("Check All Availability")}`, action: "checkAll" });
+            items.push({ label: `$(coin) ${l10n("Query Balance / Plan Usage")}`, action: "queryBalance" });
             items.push({ label: `$(arrow-left) ${l10n("Back")}`, action: "back" });
 
             const picked = await vscode.window.showQuickPick(items, {
@@ -770,6 +830,9 @@ async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void
                 continue;
             } else if (action === "checkAll") {
                 await checkAllAvailabilityFlow();
+                continue;
+            } else if (action === "queryBalance") {
+                await queryBalanceFlow();
                 continue;
             } else {
                 return; // back or cancel

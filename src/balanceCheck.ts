@@ -4,7 +4,13 @@
  * 通过 tr_session cookie 调用用户中心 `GET /api/usage-summary` 查询余额，
  * 独立实现（不依赖 scripts/cookieApi，该目录为独立 tsconfig）。
  *
- * 实测确认（2026-08-09）：
+ * ⚠️ **平台已改版（2026-09-23 实测）**：旧端点 `senseaudio.cn/api/usage-summary` 与
+ * `/api/api-keys` **均已 404**（2026-08-24 实测还是 200）。用户中心已迁移为三域认证体系，
+ * 套餐用量数据源变更为 `platform.senseaudio.cn/api/user/self`（Bearer PASETO token 认证，
+ * 插件只有 tr_session cookie 拿不到 token）。本模块的查询会全部失败并静默降级
+ * （返回 undefined，不阻塞请求，回退被动检测——余额不足时 API 返回 402 触发轮换）。
+ *
+ * 历史实测确认（2026-08-09，端点尚存时）：
  * - 余额为负时 usage-summary 仍返回 code:0 + availableBalanceCny
  * - 余额不足时 `POST /v1/chat/completions` 返回 HTTP 402 + INSUFFICIENT_BALANCE（不消耗 token）
  * - `GET /v1/models` 不校验余额（余额 < 0 也 200），不能作为可用性判据
@@ -18,6 +24,15 @@ const REQUEST_TIMEOUT_MS = 20_000;
 const DEFAULT_BASE_URL = "https://api.senseaudio.cn/v1/";
 /** 手动检测用的最小聊天请求模型（deepseek-v4-flash 已下线，400 "模型未找到"，2026-09-19 实测） */
 const TEST_MODEL_ID = "deepseek-v4.1-flash";
+/** 平台用户中心新端点（2026-09-23 实测，Bearer PASETO token 认证） */
+const PLATFORM_USER_SELF_URL = "https://platform.senseaudio.cn/api/user/self";
+/** platform 域必需的固定头（2026-09-23 实测：缺 x-platform/x-product 会 403 forbidden） */
+const PLATFORM_HEADERS: Record<string, string> = {
+    "x-platform": "WEB",
+    "x-product": "SenseAudio",
+    "x-version": "1.0.2",
+    "Accept": "application/json",
+};
 
 /**
  * 余额详情（GET /api/usage-summary 的 data 子集）。
@@ -36,6 +51,50 @@ export interface BalanceDetail {
     availableBalanceCny: number;
     expiringBalanceCny: number;
     nextExpiryAt: string | null;
+}
+
+/**
+ * 套餐用量详情（GET platform.senseaudio.cn/api/user/self 的 usage_infos 子集，2026-09-23 实测）。
+ *
+ * 平台套餐分三个窗口：5小时积分 / 每周全部模型积分 / 30天积分。
+ * `reset_time` 为 epoch 秒（5小时=上次消耗后+5h；每周=周一 00:00；30天=套餐生效日+30天）。
+ */
+export interface PlanUsageWindow {
+    /** 窗口标识：credit_5h_limit / credit_7d_limit / credit_30d_limit */
+    key: string;
+    /** 窗口描述（如 "5小时积分"） */
+    desc: string;
+    /** 已用积分 */
+    usedCount: number;
+    /** 排队中积分 */
+    pendingCount: number;
+    /** 窗口上限 */
+    totalCount: number;
+    /** 重置时间（epoch 秒） */
+    resetTime: number;
+}
+
+/**
+ * 账号余额/套餐详情（GET platform.senseaudio.cn/api/user/self，2026-09-23 实测）。
+ *
+ * - `vouchers` 单位是积分（1 元 = 5000 积分），网页显示的「代金券余额」 = Σ可用代金券积分 / 5000
+ * - 扣减顺序：套餐积分 → 代金券（按到期时间先后）→ 现金余额
+ */
+export interface AccountInfo {
+    /** 现金余额（元，备用扣减） */
+    balance: number;
+    /** 代金券列表（available/total/used 单位均为积分） */
+    vouchers: Array<{ voucherId: number; name: string; available: number; total: number; used: number; expireAt: number | null }>;
+    /** 代金券可用总额（积分） */
+    voucherAvailablePoints: number;
+    /** 代金券可用总额（元 = 积分 / 5000） */
+    voucherAvailableCny: number;
+    /** 最早到期时间（epoch 秒，无则 null） */
+    earliestVoucherExpiry: number | null;
+    /** 额外用量开关 */
+    enableExtraUsage: boolean;
+    /** 套餐用量窗口（5小时/每周/30天） */
+    usageInfos: PlanUsageWindow[];
 }
 
 /** 余额查询 TTL 缓存（按 cookie 粒度，缓存完整详情） */
@@ -71,11 +130,123 @@ export function getBalanceCheckIntervalSec(): number {
 }
 
 // ---------------------------------------------------------------------------
+// 平台用户中心查询（登录 PASETO token，2026-09-23 新端点）
+// ---------------------------------------------------------------------------
+
+/**
+ * 查询账号余额/套餐详情（GET platform.senseaudio.cn/api/user/self）。
+ *
+ * **认证方式（2026-09-23 实测）**：`Authorization: Bearer <登录 PASETO token>`，
+ * token 来自浏览器 localStorage `user.state.token`（60 天有效，subject: "SenseAudio.AI Login"）。
+ * 用户需手动从浏览器复制（F12 → Application → Local Storage → senseaudio.cn → user）。
+ * 缺 x-platform/x-product 头会 403 forbidden（ref_code:403002）。
+ *
+ * @param loginToken 登录 PASETO token（浏览器 localStorage user.state.token）
+ * @throws 网络错误 / 401（token 失效）/ 403（缺必需头）
+ */
+export async function queryAccountInfo(loginToken: string): Promise<AccountInfo> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    try {
+        const response = await fetch(PLATFORM_USER_SELF_URL, {
+            headers: {
+                ...PLATFORM_HEADERS,
+                Authorization: `Bearer ${loginToken}`,
+            },
+            signal: controller.signal,
+        });
+        if (response.status === 401) {
+            throw new Error("401 未认证：登录 token 失效，请从浏览器重新复制");
+        }
+        if (response.status === 403) {
+            throw new Error("403 禁止访问：token 格式错误或非登录 token");
+        }
+        if (!response.ok) {
+            throw new Error(`账号信息查询失败：[${response.status}] ${response.statusText}`);
+        }
+        const body = (await response.json()) as {
+            id?: string;
+            username?: string;
+            points?: number;
+            balance?: number;
+            account_info?: {
+                balance?: number;
+                vouchers?: Array<{ voucher_id: number; name: string; available: number; total: number; used: number; expire_at: number | null }>;
+                enable_extra_usage?: boolean;
+            };
+            usage_infos?: Array<{ key: string; desc: string; used_count: number; pending_count: number; total_count: number; reset_time: number }>;
+        };
+        const ai = body.account_info ?? {};
+        const vouchers = (ai.vouchers ?? []).map((v) => ({
+            voucherId: v.voucher_id,
+            name: v.name,
+            available: toNumber(v.available),
+            total: toNumber(v.total),
+            used: toNumber(v.used),
+            expireAt: typeof v.expire_at === "number" ? v.expire_at : null,
+        }));
+        const now = Date.now() / 1000;
+        const validVouchers = vouchers.filter((v) => v.available > 0 && (v.expireAt === null || v.expireAt > now));
+        const voucherAvailablePoints = validVouchers.reduce((s, v) => s + v.available, 0);
+        return {
+            balance: toNumber(ai.balance ?? body.balance),
+            vouchers,
+            voucherAvailablePoints,
+            voucherAvailableCny: voucherAvailablePoints / 5000,
+            earliestVoucherExpiry: validVouchers.length ? Math.min(...validVouchers.map((v) => v.expireAt ?? Infinity)) : null,
+            enableExtraUsage: ai.enable_extra_usage ?? true,
+            usageInfos: (body.usage_infos ?? []).map((u) => ({
+                key: u.key,
+                desc: u.desc,
+                usedCount: toNumber(u.used_count),
+                pendingCount: toNumber(u.pending_count),
+                totalCount: toNumber(u.total_count),
+                resetTime: toNumber(u.reset_time),
+            })),
+        };
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+/** 带 TTL 缓存的账号信息查询（按 token 粒度）；查询失败返回 undefined（不抛错） */
+export async function getAccountInfoCached(loginToken: string, ttlSec: number): Promise<AccountInfo | undefined> {
+    if (ttlSec > 0) {
+        const cached = accountInfoCache.get(loginToken);
+        if (cached && Date.now() - cached.checkedAt < ttlSec * 1000) {
+            return cached.info;
+        }
+    }
+    try {
+        const info = await queryAccountInfo(loginToken);
+        accountInfoCache.set(loginToken, { info, checkedAt: Date.now() });
+        return info;
+    } catch (err) {
+        logger.warn("key.accountInfo", {
+            error: err instanceof Error ? err.message : String(err),
+        });
+        return undefined;
+    }
+}
+
+/** 账号信息 TTL 缓存（按 token 粒度） */
+interface AccountInfoCacheEntry {
+    info: AccountInfo;
+    checkedAt: number;
+}
+const accountInfoCache = new Map<string, AccountInfoCacheEntry>();
+
+// ---------------------------------------------------------------------------
 // 余额查询
 // ---------------------------------------------------------------------------
 
 /**
  * 查询账号余额详情（GET /api/usage-summary）。
+ *
+ * ⚠️ 2026-09-23 实测：该端点已 404（平台改版，数据源迁移至
+ * `platform.senseaudio.cn/api/user/self`，Bearer PASETO token 认证）。
+ * 本函数会稳定失败，调用方（getBalanceDetailCached）静默降级返回 undefined。
+ *
  * @throws 网络错误 / 非 2xx / code!==0 / 401（cookie 失效）
  */
 export async function queryBalanceDetail(cookie: string): Promise<BalanceDetail> {
@@ -163,9 +334,11 @@ const API_KEYS_URL = "https://senseaudio.cn/api/api-keys";
 /**
  * 查询 cookie 对应账号下的全部 API Key 列表（GET /api/api-keys）。
  *
- * 实测（2026-08-24）：仅需 `tr_session` cookie 即可调用（与 usage-summary 同认证，
- * 无 CSRF/反爬限制）。返回 data 为 key 数组，含 id/name/maskedKey/keyPrefix/
- * status/lastUsedAt/createdAt。
+ * ⚠️ 2026-09-23 实测：该端点已 404（平台改版，数据源迁移至
+ * `platform.senseaudio.cn/api/apikey/default`，Bearer PASETO token 认证）。
+ * 本函数会稳定失败，调用方（getApiKeysByCookieCached）静默降级返回 undefined。
+ *
+ * 历史实测（2026-08-24，端点尚存时）：仅需 `tr_session` cookie 即可调用。
  *
  * @throws 网络错误 / 非 2xx / code!==0 / 401（cookie 失效）
  */
@@ -316,7 +489,10 @@ export async function isKeyBalanceSufficient(cookie: string): Promise<boolean> {
 // ---------------------------------------------------------------------------
 
 /**
- * 手动检测 key 可用性：查 cookie 余额 + 最小真实聊天请求。
+ * 手动检测 key 可用性：可选查 cookie 余额 + 最小真实聊天请求。
+ *
+ * **不绑定 cookie 也可检测**：cookie 仅用于余额预检（可选），核心判据是
+ * 最小真实聊天请求（`say ok` + `max_tokens=8`）——返回不报错即模型可用。
  *
  * 判定：
  * - 余额 ≤ minBalanceCny → { ok: false, reason: "balance" }

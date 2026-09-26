@@ -6,7 +6,7 @@
 > - **Responses API（`/v1/responses`）问题分析见根目录 [`RESPONSES_API_ISSUES.md`](../RESPONSES_API_ISSUES.md)**（工具格式扁平化、拒绝 function_call 块、tool_choice 受限等）。
 >
 > 本文档记录 SenseAudio 平台的 API 地址信息，供扩展开发与调试参考。
-> 最后更新：2026-09-23（Anthropic 端点全参数实测）
+> 最后更新：2026-09-23（平台改版重探：三域认证体系 + 套餐用量数据源 + 旧端点 404）
 
 ---
 
@@ -88,71 +88,73 @@ https://api.senseaudio.cn/v1
 
 ---
 
-## 7. 用户中心 API（cookie 认证，`/api/*`）
+## 7. 用户中心 API（2026-09-23 平台改版重探）
 
-> 与 `/v1/*`（Bearer API Key）是两套体系。用户中心 `/api/*` 用 `tr_session` cookie 认证，
-> 用于查询账号信息、余额、调用日志、API Key 管理等。基础地址 `https://senseaudio.cn`（无 `/v1`）。
+> ⚠️ **平台已改版（2026-09-23 实测）**：旧端点 `senseaudio.cn/api/usage-summary` 与 `/api/api-keys` **均已 404**（2026-08-24 实测还是 200）。
+> 用户中心已迁移为**三域三制**认证体系，套餐用量数据源变更为 `platform.senseaudio.cn/api/user/self`。
 
-### 7.1 已确认端点
+### 7.0 三域认证体系（2026-09-23 实测）
 
-| 端点 | 方法 | 认证 | 用途 | CSRF |
-|------|------|------|------|------|
-| `/api/usage-summary` | GET | tr_session | 余额 + 用量汇总（`balanceCny`/`availableBalanceCny`/`expiringBalanceCny`/`nextExpiryAt`） | 无 |
-| `/api/auth/me` | GET | tr_session | 当前账号信息（id/name/phoneMasked/status/role）；**响应会 Set-Cookie 下发 `tr_csrf`** | 无 |
-| `/api/api-keys` | GET | tr_session | API Key 列表（`data` 数组，含 `id`/`name`/`maskedKey`/`keyPrefix`/`status`/`lastUsedAt`/`createdAt`） | 无 |
-| `/api/api-keys` | POST | tr_session + CSRF | 创建 API Key，body `{"name":"..."}`，返回含完整 `key`（仅此次展示） | **有** |
-| `/api/api-keys/{id}/delete` | POST | tr_session + CSRF | 删除指定 API Key（注意是 POST 不是 DELETE） | **有** |
-| `/api/call-logs/page` | GET | tr_session | 调用日志分页（`startAt`/`endAt`/`page`/`pageSize`） | 无 |
+| 域 | 认证方式 | 说明 |
+|----|---------|------|
+| `senseaudio.cn/api/*` | `tr_session` cookie | 主站会话（页面登录态）；`/api/config` 无需认证 200；旧端点 `usage-summary`/`api-keys` 已 404 |
+| `platform.senseaudio.cn/api/*` | **`Authorization: Bearer <PASETO token>`** + `x-platform: WEB` / `x-product: SenseAudio` / `x-version: 1.0.2` / `x-language: zh-cn` / `x-machine: <hash>` 头 | **不是 cookie！** token 来自 `localStorage.user.state.token`（PASETO v2.public，有效期 60 天，payload 含 user_id/role/platform=WEB/login_id）；无 token → 403 `forbidden`（`ref_code:403002`） |
+| `auth.senseaudio.cn/v1/apikey/apply_token_via_public_key` | public_key 换发 | 用 `pub-*` 公钥换发**短期 API token**（24h 有效，响应含 `token` + `expireAt` epoch 秒） |
 
-### 7.2 API Key 列表返回结构（GET /api/api-keys）
+> **插件影响**：插件只有 `tr_session` cookie，**拿不到 localStorage 里的 PASETO token**（httpOnly 页面上下文），因此无法直接调用 `platform.senseaudio.cn/api/*`。旧 `tr_session` cookie 端点已 404，`balanceCheck.ts` 的余额预检与平台 Key 数量查询会全部失败（好在失败时静默降级不阻塞请求）。
+
+### 7.1 套餐用量核心数据源：`GET platform.senseaudio.cn/api/user/self`（Bearer token）
+
+响应里的 **`usage_infos`** 数组就是网页「Token 套餐 → 套餐用量限制」三块卡片的数据：
 
 ```jsonc
-{
-  "code": 0,
-  "message": "ok",
-  "data": [
-    {
-      "id": "043ea3b0-7037-4251-922c-bae7b9bde8cc",
-      "name": "默认 API Key",
-      "maskedKey": "sk_tr_68****7R0gHo",
-      "keyPrefix": "sk_tr_68Hxko",
-      "status": "enabled",          // enabled / disabled
-      "lastUsedAt": "2026-08-24T02:46:49.699Z",  // 可能为 null
-      "createdAt": "2026-08-22T22:56:21.714Z"
-    }
+"usage_infos": [
+  { "key": "credit_5h_limit",  "desc": "5小时积分",       "used_count": 0,     "pending_count": 0, "total_count": 10000, "reset_time": 1790099464 },
+  { "key": "credit_7d_limit",  "desc": "每周全部模型积分", "used_count": 0,     "pending_count": 0, "total_count": 10000, "reset_time": 1790524800 },
+  { "key": "credit_30d_limit", "desc": "30天积分",        "used_count": 10012, "pending_count": 0, "total_count": 10000, "reset_time": 1792166400 }
+]
+```
+
+- `reset_time` 为 epoch 秒：5小时窗口 = 上次消耗积分后 +5h；每周 = 周一 00:00；30天 = 套餐生效日 +30天
+- **30天已用 10012 > 上限 10000**（超限后走额外用量）
+
+### 7.2 额外用量（余额）数据源：同响应的 `account_info`
+
+```jsonc
+"account_info": {
+  "balance": 0,                    // 现金余额（备用扣减，元）
+  "balance_in_flight": 0,
+  "channel_balance": 0,
+  "credits": [],
+  "vouchers": [                     // 代金券，单位 = 积分（1 元 = 5000 积分）
+    { "voucher_id": 66804, "name": "注册赠送代金券", "available": 18779586, "total": 20000000, "used": 1220414, "pending": 0, "expire_at": 1792168235 },
+    ...
   ],
-  "traceId": "trace_..."
+  "status": "NORMAL",
+  "enable_extra_usage": true        // 额外用量开关
 }
 ```
 
-> **可用 Key 数量**：`data.filter(k => k.status === "enabled").length`。平台上限 10 个（停用/删除的不占上限），网页显示为 "可用 Key N / 10"。
+- **代金券单位是积分**：网页显示的「代金券余额 338.78 元」 = Σ可用代金券积分 / 5000
+- **扣减顺序**：套餐积分 → 代金券（按到期时间先后）→ 现金余额
+- `enable_extra_usage: false` 时套餐额度用尽即无法调用
 
-### 7.3 CSRF 机制（创建/删除 key）
+### 7.3 套餐档位：`GET platform.senseaudio.cn/api/recharge/subscribe/list`（Bearer token）
 
-创建/删除 API Key 受 CSRF 保护，需三重校验：
+`concurrent_rights` 数组含各档位限制：`credit_5h_limit`（5小时积分）/ `credit_7d_limit`（每周全部模型积分）/ `month_base_points`（30天套餐积分）及各能力并发限制（TTS/ASR/图片/视频/音乐/Agent 等）。
 
-1. **`tr_session` cookie**（认证）
-2. **`tr_csrf` cookie + `x-csrf-token` header**（值相同；`tr_csrf` 可通过 `GET /api/auth/me` 响应的 Set-Cookie 获取）
-3. **反爬 cookie**：`_c_WBKFRo` + `tr_ref_device` + `_nb_ioWEgULi`（网页加载时服务端/JS 下发）
+### 7.4 API Key 数据：`GET platform.senseaudio.cn/api/apikey/default`（Bearer token）
 
-### 7.4 ⚠️ 创建/删除 key 的 TLS 指纹硬障碍（2026-08-24 实测）
+返回完整 key（`sk-...`，含 `public_key`/`remain_quota`/`unlimited_quota`/`used_quota`/`expired_time`）。`apikey/list` 稳定 500（已废弃或需特殊权限），网页只用 `apikey/default`。
 
-**结论：Node.js / curl 无法创建/删除 key，只有真实浏览器环境能通过。**
+### 7.5 旧端点状态（2026-09-23 实测，均已失效）
 
-实测（2026-08-24，cookie + headers 完全相同）：
+| 旧端点 | 现状 |
+|--------|------|
+| `senseaudio.cn/api/usage-summary` | **404**（已迁移/删除） |
+| `senseaudio.cn/api/api-keys` | **404**（已迁移/删除） |
+| `senseaudio.cn/api/auth/me` | 未复测（可能仍存在） |
+| `senseaudio.cn/api/call-logs/page` | 未复测（可能仍存在） |
+| `platform.senseaudio.cn/api/apikey/list` | 稳定 500（已废弃） |
 
-| 调用方式 | 结果 |
-|----------|------|
-| 浏览器页面内 `fetch`（`credentials: "include"` + `x-csrf-token` header） | ✅ 200 成功创建/删除 |
-| Node.js `fetch`（带完全相同 cookie + headers + sec-ch-ua） | ❌ 403 CSRF_INVALID |
-| curl（带完全相同 cookie + headers + sec-ch-ua） | ❌ 403 CSRF_INVALID |
-
-`_c_WBKFRo` 在同一浏览器内是固定值（刷新 3 次不变），但 Node.js/curl 带上它仍被拒。
-说明服务端用了 **TLS 指纹校验（JA3/JA4）**——只有真实浏览器的 TLS 握手能通过，
-Node.js（undici）和 curl 的 TLS 指纹被识别并拒绝。
-
-**影响**：VS Code 扩展运行在 Node.js 环境，**无法绕过 TLS 指纹校验**，
-因此纯 API 方式创建/删除 key 不可行。查询（GET）不受影响，稳定可用。
-
-> 若未来需实现创建/删除，只能用 `vscode.window.createWebviewPanel` 内嵌
-> `/account/keys` 页面让用户在真实浏览器环境操作，非纯 API 调用。
+> **历史记录（2026-08-24，端点尚存时）**：`/api/usage-summary` 返回 `balanceCny`/`availableBalanceCny`/`expiringBalanceCny`/`nextExpiryAt`；`/api/api-keys` 返回 key 列表（`maskedKey`/`keyPrefix`/`status`）；创建/删除 key 受 CSRF + TLS 指纹双重校验（Node.js/curl 无法绕过，仅真实浏览器可行）。这些端点现已 404，记录保留供追溯。
