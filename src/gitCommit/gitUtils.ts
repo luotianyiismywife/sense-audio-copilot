@@ -3,15 +3,6 @@ import { promisify } from "util";
 
 const execFileAsync = promisify(execFile);
 const GIT_OUTPUT_LINE_LIMIT = 500;
-const GIT_LOG_FORMAT = "--format=%H%n%h%n%s%n%an%n%ad";
-
-export interface GitCommit {
-    hash: string;
-    shortHash: string;
-    subject: string;
-    author: string;
-    date: string;
-}
 
 async function checkGitRepo(cwd: string): Promise<boolean> {
     try {
@@ -37,76 +28,6 @@ async function checkGitRepoHasCommits(cwd: string): Promise<boolean> {
         return true;
     } catch {
         return false;
-    }
-}
-
-export async function searchCommits(query: string, cwd: string): Promise<GitCommit[]> {
-    try {
-        const isInstalled = await checkGitInstalled();
-        if (!isInstalled) {
-            console.error("Git is not installed");
-            return [];
-        }
-
-        const isRepo = await checkGitRepo(cwd);
-        if (!isRepo) {
-            console.error("Not a git repository");
-            return [];
-        }
-
-        if (!(await checkGitRepoHasCommits(cwd))) {
-            return [];
-        }
-
-        const { stdout } = await execFileAsync("git", [
-            "log",
-            "-n",
-            "10",
-            GIT_LOG_FORMAT,
-            "--date=short",
-            "--grep",
-            query,
-            "--regexp-ignore-case",
-        ], { cwd });
-
-        let output = stdout;
-        if (!output.trim() && /^[a-f0-9]+$/i.test(query)) {
-            const { stdout: hashStdout } = await execFileAsync("git", [
-                "log",
-                "-n",
-                "10",
-                GIT_LOG_FORMAT,
-                "--date=short",
-                "--author-date-order",
-                query,
-            ], { cwd }).catch(() => ({ stdout: "" }));
-
-            if (!hashStdout.trim()) {
-                return [];
-            }
-
-            output = hashStdout;
-        }
-
-        if (!output.trim()) {
-            return [];
-        }
-
-        const lines = output.trim().split("\n");
-        const commits: GitCommit[] = [];
-        for (let i = 0; i + 4 < lines.length; i += 5) {
-            commits.push({
-                hash: lines[i].trim(),
-                shortHash: lines[i + 1].trim(),
-                subject: lines[i + 2].trim(),
-                author: lines[i + 3].trim(),
-                date: lines[i + 4].trim(),
-            });
-        }
-        return commits;
-    } catch (error) {
-        console.error("Error searching commits:", error);
-        return [];
     }
 }
 

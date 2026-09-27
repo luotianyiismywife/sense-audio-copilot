@@ -1,17 +1,48 @@
-# SenseAudio API 测试
+# SenseAudio 测试脚本
 
-三协议完整测试脚本，用于验证 SenseAudio 平台 API 的兼容性。
+> 所有测试运行前需先 `npm run compile`（除 `api-tests.mjs` 外，其余测试从 `out/` 加载编译产物）。
+
+## 测试清单
+
+| 脚本 | 类型 | 说明 |
+|------|------|------|
+| `api-tests.mjs` | 联网 | 三协议完整测试（OpenAI / Anthropic / Responses），需真实 API Key |
+| `test-plan-usage.mjs` | 离线 | **套餐用量快照**（29 项断言）：窗口归一化、百分比、超额判定、三态计费模式、倒计时、摘要格式化、真实 API 夹具回归 |
+| `test-transient-retry.mjs` | 离线 | **瞬态错误分类**（13 项断言）：500 命中重试但不命中轮换（平台问题不换 key）、429/503 两者都命中、400/403 都不命中、401/402 仅轮换 |
+| `test-vision-history.mjs` | 离线 | 跨轮视觉历史编解码 + 双 API 转换器闭环（含 DeepSeek 空 reasoning_content 回归） |
+| `test-anthropic-tool-result-merge.mjs` | 离线 | Anthropic 连续工具结果合并（issue #87：3 个并行 tool_use 结果合并为单条 user 消息） |
+| `test-apply-token.mjs` | 联网 | 令牌应用测试 |
+| `test-banned-detect.mjs` | 联网 | 封号检测测试 |
+| `test-banned-rotation.mjs` | 联网 | 封号轮换测试 |
+| `test-model-diff.mjs` | 联网 | 模型差异测试 |
+| `test-responses-recheck.mjs` | 联网 | Responses 协议复检 |
+| `test-vision-check.mjs` | 联网 | 视觉能力检查 |
 
 ## 运行
 
 ```bash
+npm run compile
+
+# 离线测试（无需 API Key）
+node test/test-plan-usage.mjs
+node test/test-transient-retry.mjs
+node test/test-vision-history.mjs
+node test/test-anthropic-tool-result-merge.mjs
+
+# 联网测试（需 API Key）
 node test/api-tests.mjs <API_KEY> [openai|anthropic|responses|all]
 ```
+
+---
+
+## `api-tests.mjs` 详情
+
+三协议完整测试脚本，用于验证 SenseAudio 平台 API 的兼容性。
 
 - `<API_KEY>`: SenseAudio API key（`sk_tr_...`）
 - filter 可选: `openai` | `anthropic` | `responses` | `all`（默认 `all`）
 
-## 覆盖场景
+### 覆盖场景
 
 | 协议 | 编号 | 场景 |
 |------|------|------|

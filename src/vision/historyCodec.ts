@@ -1,5 +1,5 @@
-import type { AnthropicMessage } from "../anthropic/anthropicTypes";
-import type { OpenAIChatMessage } from "../openai/openaiTypes";
+import type { AnthropicMessage } from "../api/anthropic/anthropicTypes";
+import type { OpenAIChatMessage } from "../api/openai/openaiTypes";
 import { ASK_IMAGE_TOOL_NAME, ASK_WITH_MULTI_IMAGE_TOOL_NAME } from "./types";
 
 /**

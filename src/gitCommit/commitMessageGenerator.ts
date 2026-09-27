@@ -2,14 +2,14 @@ import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
 import { getGitDiff, getRecentCommits } from "./gitUtils";
-import { OpenaiApi } from "../openai/openaiApi";
-import { AnthropicApi } from "../anthropic/anthropicApi";
-import { ResponsesApi } from "../responses/responsesApi";
-import { getBuiltInModelConfig } from "../models";
-import { getResponsesSupportedModelIds, getAnthropicSupportedModelIds } from "../apiModelList";
-import { logger } from "../logger";
-import { l10n, l10nFormat } from "../localize";
-import type { SenseAudioModelItem } from "../types";
+import { OpenaiApi } from "../api/openai/openaiApi";
+import { AnthropicApi } from "../api/anthropic/anthropicApi";
+import { ResponsesApi } from "../api/responses/responsesApi";
+import { getBuiltInModelConfig } from "../models/models";
+import { getResponsesSupportedModelIds, getAnthropicSupportedModelIds } from "../models/apiModelList";
+import { logger } from "../core/logger";
+import { l10n, l10nFormat } from "../core/localize";
+import type { SenseAudioModelItem } from "../core/types";
 import {
     getApiKeyMode,
     getApiKeyStore,
@@ -27,9 +27,8 @@ import {
     setActiveKeyByValue,
     shouldSingleKeyFallbackSwitch,
     type ApiKeyEntry,
-} from "../keyManager";
-import { getBalanceCheckEnabled, checkKeyBalance } from "../balanceCheck";
-import { buildAllKeysUnavailableDetail, REASON_TEXT, tryTransientRetryRound } from "../provider";
+} from "../keys/keyManager";
+import { buildAllKeysUnavailableDetail, REASON_TEXT, tryTransientRetryRound } from "../provider/provider";
 
 /**
  * Git commit message generator module.
@@ -379,28 +378,6 @@ async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff
                 }
             }
 
-            // Proactive balance pre-check — DISABLED.
-            // SenseAudio 平台无 cookie 余额接口，余额不足由 API 返回 402 触发被动轮换兜底。
-            const balanceCheckDisabled = false; // set true to re-enable proactive balance pre-check
-            if (balanceCheckDisabled && getBalanceCheckEnabled() && entry?.cookie) {
-                const current = entry as ApiKeyEntry; // block is disabled; assertion is safe
-                const check = await checkKeyBalance(current.cookie as string);
-                if (!check.sufficient) {
-                    failedKeys.set(current.value, "balance");
-                    await markApiKeyExhausted(secrets, current.value, "balance");
-                    logger.warn("commit.key.rotation", {
-                        key: current.value.slice(0, 6) + "****",
-                        reason: "balance_check",
-                        balance: check.balance,
-                    });
-                    continue; // try next key
-                }
-                // Self-heal: previously marked unavailable but balance is back
-                if (current.available === false) {
-                    await markApiKeyAvailable(secrets, current.value);
-                    logger.info("commit.key.recovered", { key: current.value.slice(0, 6) + "****" });
-                }
-            }
             const apiInstance = apiMode === "anthropic"
                 ? new AnthropicApi(modelId)
                 : apiMode === "responses"
@@ -418,6 +395,12 @@ async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff
                         response += chunk.text;
                         inputBox.value = extractCommitMessage(response);
                     }
+                }
+                // Success — self-heal if this key was previously marked unavailable
+                // (mirrors the chat rotation loop in provider/rotation.ts).
+                if (entry.available === false) {
+                    await markApiKeyAvailable(secrets, entry.value);
+                    logger.info("commit.key.recovered", { key: maskApiKey(entry.value) });
                 }
                 break; // success
             } catch (err) {
@@ -452,6 +435,28 @@ async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff
                     });
                     continue; // try next key
                 }
+
+                // Platform-side transient error that is NOT a key problem
+                // (e.g. 500 Internal Server Error — the key is fine, the
+                // platform is having trouble). Do NOT mark the key or rotate:
+                // just back off and retry the whole round with the same key.
+                if (isTransientRetryError(err)) {
+                    if (await tryTransientRetryRound(secrets, transientRetryCount, maxTransientRetries)) {
+                        transientRetryCount++;
+                        failedKeys.clear();
+                        logger.warn("commit.key.transientRetrySameKey", {
+                            key: entry.value.slice(0, 6) + "****",
+                            attempt: transientRetryCount,
+                            error: err instanceof Error ? err.message : String(err),
+                        });
+                        continue; // retry the whole round (same key will be re-picked)
+                    }
+                    logger.warn("commit.key.transientRetryExhausted", {
+                        key: entry.value.slice(0, 6) + "****",
+                        attempts: transientRetryCount,
+                    });
+                }
+
                 throw err; // non-rotation error
             }
         }

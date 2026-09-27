@@ -85,6 +85,21 @@
 				"command": "senseaudio.setVisionProxyModel",
 				"category": "%commandCategory%",
 				"title": "%command.setVisionProxyModel%"
+			},
+			{
+				"command": "senseaudio.syncPush",
+				"category": "%commandCategory%",
+				"title": "%command.syncPush%"
+			},
+			{
+				"command": "senseaudio.syncPull",
+				"category": "%commandCategory%",
+				"title": "%command.syncPull%"
+			},
+			{
+				"command": "senseaudio.checkUsage",
+				"category": "%commandCategory%",
+				"title": "%command.checkUsage%"
 			}
 		],
 		"walkthroughs": [
@@ -334,7 +349,7 @@
 				},
 				"senseaudio.enableThirdPartyTokenIndicator": {
 					"type": "boolean",
-					"default": true,
+					"default": false,
 					"description": "%config.enableThirdPartyTokenIndicator.desc%"
 				},
 				"senseaudio.apiMode": {
@@ -401,7 +416,7 @@
 					"items": {
 						"type": "number"
 					},
-					"default": [429, 503],
+					"default": [429, 500, 503],
 					"description": "%config.transientRetryStatusCodes.desc%"
 				},
 				"senseaudio.apiKeyExhaustedCooldownMin": {
@@ -416,6 +431,85 @@
 					"minimum": 0,
 					"maximum": 10,
 					"description": "%config.transientRetryTimes.desc%"
+				},
+				"senseaudio.cloudSyncAutoPull": {
+					"type": "boolean",
+					"default": true,
+					"description": "%config.cloudSyncAutoPull.desc%"
+				},
+				"senseaudio.showUsageInStatusBar": {
+					"type": "boolean",
+					"default": true,
+					"description": "%config.showUsageInStatusBar.desc%"
+				},
+				"senseaudio.showUsageInTooltip": {
+					"type": "boolean",
+					"default": true,
+					"description": "%config.showUsageInTooltip.desc%"
+				},
+				"senseaudio.usageRefreshInterval": {
+					"type": "number",
+					"default": 5,
+					"minimum": 1,
+					"maximum": 60,
+					"description": "%config.usageRefreshInterval.desc%"
+				},
+				"senseaudio.minBalanceCny": {
+					"type": "number",
+					"default": 0,
+					"minimum": 0,
+					"description": "%config.minBalanceCny.desc%"
+				},
+				"senseaudio.balanceCheckIntervalSec": {
+					"type": "number",
+					"default": 60,
+					"minimum": 0,
+					"description": "%config.balanceCheckIntervalSec.desc%"
+				},
+				"senseaudio.delay": {
+					"type": "number",
+					"default": 0,
+					"minimum": 0,
+					"description": "%config.delay.desc%"
+				},
+				"senseaudio.readFileLines": {
+					"type": "number",
+					"default": 0,
+					"minimum": 0,
+					"description": "%config.readFileLines.desc%"
+				},
+				"senseaudio.visionMaxRounds": {
+					"type": "number",
+					"default": 5,
+					"minimum": 1,
+					"maximum": 20,
+					"description": "%config.visionMaxRounds.desc%"
+				},
+				"senseaudio.retry.enabled": {
+					"type": "boolean",
+					"default": true,
+					"description": "%config.retry.enabled.desc%"
+				},
+				"senseaudio.retry.maxAttempts": {
+					"type": "number",
+					"default": 2,
+					"minimum": 1,
+					"maximum": 10,
+					"description": "%config.retry.maxAttempts.desc%"
+				},
+				"senseaudio.retry.intervalMs": {
+					"type": "number",
+					"default": 1000,
+					"minimum": 0,
+					"description": "%config.retry.intervalMs.desc%"
+				},
+				"senseaudio.retry.statusCodes": {
+					"type": "array",
+					"items": {
+						"type": "number"
+					},
+					"default": [],
+					"description": "%config.retry.statusCodes.desc%"
 				}
 			}
 		}
@@ -423,11 +517,12 @@
 	"main": "./out/extension.js",
 	"scripts": {
 		"vscode:prepublish": "npm run compile",
-		"compile": "tsc -p ./ && node scripts/build-info.mjs",
+		"compile": "tsc -p ./ && node scripts/build/build-info.mjs && node scripts/dev/check-settings.mjs",
+		"audit": "node scripts/dev/audit-all.mjs",
 		"lint": "eslint",
 		"watch": "tsc -watch -p ./",
-		"build": "node scripts/package-vsix.mjs",
-		"postinstall": "node scripts/copy-tokenizer.js"
+		"build": "node scripts/build/package-vsix.mjs",
+		"postinstall": "node scripts/build/copy-tokenizer.js"
 	},
 	"dependencies": {
 		"@microsoft/tiktokenizer": "^1.0.10"

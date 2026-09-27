@@ -23,13 +23,26 @@ Integrate [SenseAudio](https://senseaudio.cn) models into GitHub Copilot Chat as
 3. **Select Model**: In the Copilot Chat bottom model picker, choose a "SenseAudio" model
 4. **Start chatting**
 
-### Advanced Token Usage Indicator
+### Status Bar: Plan Usage & Token Indicator
 
-Once installed, the status bar shows the current context usage and cumulative input/output token counts for SenseAudio models. DeepSeek models and models that return cache metrics via the OpenAI-compatible format also display the **cumulative cache hit count** and **cache hit rate** in the tooltip.
+Once installed, the status bar shows your **SenseAudio plan usage** for the current 5-hour window (e.g. `5H 65%`, or `--` before the first fetch). Hover the status bar item to see:
+
+- **Plan usage**: 5-hour / weekly / monthly utilization (with absolute credits, e.g. `5H——65% (6,500 / 10,000 积分)`), the 5-hour reset countdown, and the current billing mode.
+- **Balance**: cash balance plus gift vouchers (with the earliest expiry date).
+- **Token usage**: cumulative input/output token counts, plus the cumulative cache hit count and cache hit rate for models that return cache metrics in an OpenAI-compatible format.
+
+When the monthly plan quota is exhausted, the main text switches to the balance (e.g. `余额 ¥358.78`) so you can tell at a glance that you are now being billed from your balance.
+
+Click the status bar item or run `SenseAudio: Check Plan Usage & Balance` to refresh immediately.
+
+> [!IMPORTANT]
+> **Two separate billing rules** (see the [official docs](https://docs.senseaudio.cn/guides/account/token-plan)):
+> - **Period quotas (5h / weekly) are rate-limit windows.** When exhausted, they simply wait for the next period to reset — they **do not consume your balance**.
+> - **Plan credits (monthly) are the subscription quota.** When exhausted, the overage policy applies: if balance auto-pay is enabled, the overage is billed per-use (vouchers → cash); otherwise the account **downgrades to the Free plan**.
 
 The status bar only appears while you are actually using a SenseAudio model: it stays hidden on startup and when other chat model providers are in use, and auto-hides after 60 seconds of inactivity.
 
-You can control this indicator via the `senseaudio.enableThirdPartyTokenIndicator` setting (default: `true`). When disabled, only the native Copilot token indicator remains visible.
+Relevant settings: `senseaudio.showUsageInStatusBar` (default `true`), `senseaudio.showUsageInTooltip` (default `true`), `senseaudio.usageRefreshInterval` (default 5 minutes), and `senseaudio.enableThirdPartyTokenIndicator` (default `false` — controls only the advanced token counter; the plan-usage display is independent).
 
 > [!NOTE]
 > Whether non-DeepSeek models display cache data depends on whether the model API returns cache metrics in an OpenAI-compatible format. This does not indicate whether the model supports caching — caching support depends on SenseAudio.
@@ -132,7 +145,21 @@ Available in `settings.json`:
 | `senseaudio.enableAutoModelDiscovery` | `true` | Automatically fetch the live model list from `GET /v1/models` and hide models unavailable on your account. |
 | `senseaudio.syncModelsOnStartup` | `true` | Check for new SenseAudio models on startup, at most once per day. Sync results are reported as a single line in the "SenseAudio" Output channel. |
 | `senseaudio.maxInputTokensRatio` | `1.0` | Ratio of the real context window declared as `maxInputTokens` (0.1 - 1.0). VS Code's agent auto-compaction triggers at ~90% of the declared value. **Recommended: 0.8** so compaction fires at ~72% of the real window, preventing context overflow on large-window BYOK models. The `context_length` sent in API requests always uses the real value. |
-| `senseaudio.enableThirdPartyTokenIndicator` | `true` | Show the advanced token counter in the status bar while using SenseAudio models. |
+| `senseaudio.enableThirdPartyTokenIndicator` | `false` | Show the advanced token counter in the status bar while using SenseAudio models. The plan-usage display is independent of this setting. |
+| `senseaudio.showUsageInStatusBar` | `true` | Show the plan usage (5-hour window percentage) in the status bar main text. When disabled, the status bar shows token counts instead. |
+| `senseaudio.showUsageInTooltip` | `true` | Show the plan usage section (5-hour / weekly / monthly windows, reset countdown and balance) in the status bar tooltip. |
+| `senseaudio.usageRefreshInterval` | `5` | Background plan-usage refresh interval in minutes (1-60). |
+| `senseaudio.minBalanceCny` | `0` | Balance threshold (CNY). Total available balance (cash + vouchers) at or below this value is flagged with an error icon in the API key manager. |
+| `senseaudio.balanceCheckIntervalSec` | `60` | Cache TTL (seconds) for the account info / plan usage query. 0 = always re-fetch. |
+| `senseaudio.delay` | `0` | Minimum delay (ms) between consecutive API requests. 0 = no delay. |
+| `senseaudio.readFileLines` | `0` | Auto-expand `read_file` ranges to at least this many lines when the model omits an explicit range. 0 = disabled. |
+| `senseaudio.visionMaxRounds` | `5` | Maximum `ask_image` vision-proxy rounds per request (1-20). |
+| `senseaudio.apiKeyMode` | `sticky` | Multi-key strategy: `sticky` (pin one key, switch only when it fails), `rotation` (round-robin), `single` (use only the current key). |
+| `senseaudio.singleKeyFallback` | `switch` | In `single` mode, whether to auto-switch to another key when the current one is out of balance (`switch`) or always error (`error`). |
+| `senseaudio.apiKeyRotationStatusCodes` | `[401, 402, 429, 503]` | HTTP status codes that mark a key as failed and rotate to the next one. |
+| `senseaudio.transientRetryStatusCodes` | `[429, 500, 503]` | HTTP status codes treated as transient platform errors that trigger whole-round auto-retry. Codes that also appear in `apiKeyRotationStatusCodes` (429/503) mark the key as cooling and rotate; codes that do not (500) leave the key untouched and retry the same key — a 500 is a platform problem, not a key problem. |
+| `senseaudio.transientRetryTimes` | `3` | How many times to auto-retry the whole round when every key fails with a transient error. Exponential backoff (2s/4s/8s). 0 = disable. |
+| `senseaudio.apiKeyExhaustedCooldownMin` | `10` | Cooldown (minutes) for transiently exhausted keys before they can be reused. 0 = immediately reusable. |
 | `senseaudio.enableResponsesApi` | `false` | Use the Responses API protocol in `auto` mode for models detected as supports_responses=true at startup (from `GET /v1/models` — dynamic, no hardcoded model IDs). **Disabled by default**: the SenseAudio Responses endpoint is still evolving (inconsistent stream event types across models, unstable tool calling, non-standard multi-round tool backfill), so models fall back to the more mature OpenAI-compatible format. Enable only to try the Responses protocol. |
 | `senseaudio.enableAnthropicApi` | `false` | Use the Anthropic Messages protocol in `auto` mode for models detected as supports_anthropic=true at startup (dynamic, no hardcoded model IDs). **Disabled by default** — the Anthropic endpoint has compatibility issues with some models (e.g. DeepSeek), the more mature OpenAI-compatible format is recommended. In auto mode, priority: Responses (if enabled) > Anthropic > OpenAI. |
 | `senseaudio.apiMode` | `auto` | API protocol for requests: `auto` (follow each model's default; models with supports_responses=true use the Responses API automatically), `openai` (force OpenAI format), `anthropic` (force Anthropic format — note some models have compatibility issues, e.g. DeepSeek thinking + temperature → 400; OpenAI is recommended), or `responses` (force Responses API). Applies to both chat and Git commit generation. **Also filters the model picker**: in `anthropic` mode only supports_anthropic=true models are listed, in `responses` mode only supports_responses=true models are listed, `auto`/`openai` list all. Switching this setting updates the picker **live without reloading the window**. |
@@ -171,13 +198,26 @@ AGPL-3.0 License. This project builds upon the architecture of [opencode-go-copi
 3. **选择模型**：在 Copilot Chat 底部模型选择器中选择 "SenseAudio" 下的模型
 4. **开始对话**
 
-### 高级 Token 用量指示器
+### 状态栏：套餐用量与 Token 指示器
 
-安装后，使用 SenseAudio 提供的模型时，状态栏会显示当前上下文用量与累计输入/输出 Token 量。DeepSeek 和通过 OpenAI 格式返回缓存用量的模型还会显示**累计缓存命中量**与**缓存命中率**。
+安装后，使用 SenseAudio 提供的模型时，状态栏会显示**套餐当前 5 小时窗口的用量**（如 `5H 65%`，首次获取前显示 `--`）。悬停状态栏条目可查看：
+
+- **套餐用量**：5 小时 / 周 / 月三个窗口的使用率（含绝对积分，如 `5H——65% (6,500 / 10,000 积分)`）、5 小时窗口的重置倒计时，以及当前计费模式。
+- **余额**：现金余额 + 代金券（含最早到期日）。
+- **Token 用量**：累计输入/输出 Token 量；当模型接口以 OpenAI 兼容格式返回缓存数据时，还会显示**累计缓存命中量**与**缓存命中率**。
+
+当**月度套餐额度**耗尽时，主文本会切换为余额（如 `余额 ¥358.78`），一眼即可看出已开始从余额扣费。
+
+点击状态栏条目或运行 `SenseAudio: 查询套餐用量与余额` 可立即刷新。
+
+> [!IMPORTANT]
+> **两套计费规则相互独立**（详见[官方文档](https://docs.senseaudio.cn/guides/account/token-plan)）：
+> - **周期额度（5 小时 / 周）是限流窗口**。耗尽后只需等待下一周期自动恢复，**不会消耗余额**。
+> - **套餐积分（月度）才是订阅额度**。耗尽后走超额策略：若已开启余额自动支付，超出部分按量计费（代金券 → 现金余额）；否则账号**降级至 Free 版**。
 
 状态栏**仅在您实际使用 SenseAudio 模型时显示**：启动时隐藏、使用其他模型提供商的模型时不显示，停止使用（空闲 60 秒）后自动隐藏。
 
-可通过 `senseaudio.enableThirdPartyTokenIndicator` 设置（默认 `true`）控制此高级 Token 指示器。关闭后仅显示 Copilot 原生 Token 指示器。
+相关设置：`senseaudio.showUsageInStatusBar`（默认 `true`）、`senseaudio.showUsageInTooltip`（默认 `true`）、`senseaudio.usageRefreshInterval`（默认 5 分钟）、`senseaudio.enableThirdPartyTokenIndicator`（默认 `false`，仅控制高级 Token 计数器，与套餐用量显示相互独立）。
 
 > [!NOTE]
 > 非 DeepSeek 的模型是否显示缓存数据取决于模型接口是否通过 OpenAI 格式返回缓存数据，这并不代表此模型是否支持缓存。模型对于缓存的支持情况取决于 SenseAudio。
@@ -260,7 +300,10 @@ AGPL-3.0 License. This project builds upon the architecture of [opencode-go-copi
   "senseaudio.enableAutoModelDiscovery": true,
   "senseaudio.syncModelsOnStartup": true,
   "senseaudio.maxInputTokensRatio": 1.0,
-  "senseaudio.enableThirdPartyTokenIndicator": true,
+  "senseaudio.enableThirdPartyTokenIndicator": false,
+  "senseaudio.showUsageInStatusBar": true,
+  "senseaudio.showUsageInTooltip": true,
+  "senseaudio.usageRefreshInterval": 5,
   "senseaudio.enableResponsesApi": false,
   "senseaudio.enableAnthropicApi": false
 }
@@ -280,7 +323,21 @@ AGPL-3.0 License. This project builds upon the architecture of [opencode-go-copi
 | `senseaudio.enableAutoModelDiscovery` | `true` | 自动从 `GET /v1/models` 拉取实时模型列表，隐藏你账号下不可用的模型。 |
 | `senseaudio.syncModelsOnStartup` | `true` | 启动时自动检查是否有新的 SenseAudio 模型（每日最多一次）。同步结果以一行日志输出到「SenseAudio」输出通道。 |
 | `senseaudio.maxInputTokensRatio` | `1.0` | 每个模型声明为 `maxInputTokens` 的真实上下文窗口比例（0.1 - 1.0）。VS Code 的 agent 自动压缩约在声明的 maxInputTokens 的 90% 处触发。**建议设为 0.8** —— 可使压缩在真实窗口约 72% 处触发，防止 BYOK 大窗口模型上下文溢出。API 请求体中的 context_length 始终使用真实值。 |
-| `senseaudio.enableThirdPartyTokenIndicator` | `true` | 使用 SenseAudio 模型时在状态栏显示高级 Token 计数器。 |
+| `senseaudio.enableThirdPartyTokenIndicator` | `false` | 使用 SenseAudio 模型时在状态栏显示高级 Token 计数器。套餐用量显示与此设置相互独立。 |
+| `senseaudio.showUsageInStatusBar` | `true` | 在状态栏主文本显示套餐用量（5 小时窗口百分比）。关闭后状态栏改显 Token 计数。 |
+| `senseaudio.showUsageInTooltip` | `true` | 在状态栏悬停提示中显示套餐用量区块（5 小时 / 周 / 月三窗口、重置倒计时与余额）。 |
+| `senseaudio.usageRefreshInterval` | `5` | 后台套餐用量刷新间隔（分钟，1-60）。 |
+| `senseaudio.minBalanceCny` | `0` | 余额阈值（元）。合计可用余额（现金 + 代金券）≤ 该值时在 API Key 管理界面以错误图标标记。 |
+| `senseaudio.balanceCheckIntervalSec` | `60` | 账号信息 / 套餐用量查询的缓存 TTL（秒）。0 = 每次重新拉取。 |
+| `senseaudio.delay` | `0` | 连续 API 请求之间的最小间隔（毫秒）。0 = 不延迟。 |
+| `senseaudio.readFileLines` | `0` | 模型调用 `read_file` 未指定范围时，自动扩展到至少这么多行。0 = 禁用。 |
+| `senseaudio.visionMaxRounds` | `5` | 单次请求中 `ask_image` 视觉代理的最大轮数（1-20）。 |
+| `senseaudio.apiKeyMode` | `sticky` | 多 Key 策略：`sticky`（固定一个 key，仅失效时切换）、`rotation`（轮询）、`single`（仅用当前 key）。 |
+| `senseaudio.singleKeyFallback` | `switch` | `single` 模式下当前 key 余额不足时是否自动切换（`switch`）或直接报错（`error`）。 |
+| `senseaudio.apiKeyRotationStatusCodes` | `[401, 402, 429, 503]` | 标记 key 失效并轮换到下一个 key 的 HTTP 状态码。 |
+| `senseaudio.transientRetryStatusCodes` | `[429, 500, 503]` | 视为瞬态平台错误、触发整轮自动重试的 HTTP 状态码。**同时**出现在 `apiKeyRotationStatusCodes` 中的（429/503）会标记 key 冷却并换 key；**未**出现的（500）不标记 key、不换 key，仅重试同一个 key——500 是平台问题而非 key 问题。 |
+| `senseaudio.transientRetryTimes` | `3` | 全部 key 因瞬态错误失败时自动重试整轮的次数。指数退避（2s/4s/8s）。0 = 禁用。 |
+| `senseaudio.apiKeyExhaustedCooldownMin` | `10` | 瞬态失效 key 在可被再次使用前的冷却时长（分钟）。0 = 立即恢复。 |
 | `senseaudio.enableResponsesApi` | `false` | 当 `apiMode` 为 `auto` 时，为启动时探测到 supports_responses=true 的模型（来自 `GET /v1/models`——动态探测，不硬编码模型 ID）使用 Responses 协议。**默认关闭**：SenseAudio 的 Responses 端点仍在演进中（不同模型流式事件类型不一致、工具调用不稳定、多轮工具回填非常规），默认回退到更成熟的 OpenAI 兼容格式。仅在希望尝试 Responses 协议时开启。 |
 | `senseaudio.enableAnthropicApi` | `false` | 当 `apiMode` 为 `auto` 时，为启动时探测到 supports_anthropic=true 的模型（动态探测，不硬编码模型 ID）使用 Anthropic Messages 协议。**默认关闭** —— Anthropic 端点对部分模型存在兼容性问题（如 DeepSeek），建议使用更成熟的 OpenAI 兼容格式。auto 模式下优先级：Responses（若开启）> Anthropic > OpenAI。 |
 | `senseaudio.apiMode` | `auto` | 请求使用的 API 协议：`auto`（跟随各模型默认格式；supports_responses=true 的模型自动使用 Responses API）、`openai`（强制 OpenAI 格式）、`anthropic`（强制 Anthropic 格式——注意部分模型存在兼容性问题，如 DeepSeek 强制思考 + temperature → 400，建议使用 OpenAI）、`responses`（强制 Responses API 格式）。对聊天请求和 Git 提交消息生成均生效。**同时过滤模型选择器**：`anthropic` 模式仅列出 supports_anthropic=true 的模型，`responses` 模式仅列出 supports_responses=true 的模型，`auto`/`openai` 列出全部。切换该设置后模型选择器**即时刷新，无需 reload 窗口**。 |

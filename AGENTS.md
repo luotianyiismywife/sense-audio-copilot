@@ -27,7 +27,8 @@
 | 能力 | 说明 |
 |------|------|
 | **Chat 模型提供商** | 实现 `LanguageModelChatProvider` 接口，向 VS Code 注册为 `senseaudio` 厂商 |
-| **多 API Key 轮询** | 支持多个 API Key（SecretStorage 加密存储 `senseaudio.apiKeys`），三种模式：`sticky`（默认，固定使用一个 key，仅失效时切下一个并钉住——前缀缓存命中率最高，切换后不自动切回）/ `rotation`（轮询使用、跳过不可用 key）/ `single`（仅用当前 key；`senseaudio.singleKeyFallback`（默认 `switch`）下**仅在余额不足（402 / 预检不足）时**自动切换到下一个可用 key 并经 `setActiveKeyByValue` 设为当前使用 + 右下角弹窗提示——401 无效 Key / 429 限流 / 503 繁忙等其他错误不切换、走 single 专属报错文案；`error` 下任何错误都直接报错不切换）。**主动余额预检为核心**：每个 key 可绑定 `tr_session` cookie（一个 cookie 可绑定多个 key，余额按 cookie 粒度查询并缓存），请求前查余额 ≤ `minBalanceCny` 自动跳过；**被动检测兜底**：cookie 缺失/失效/网络失败时按请求错误（402 余额不足 / 401 无效 Key / 429 限流 / 503 服务端繁忙，状态码与文本 patterns 均可配置）判定 key 失效并切换——**402/401 持久化 `available=false`（确定性），429/503 仅内存冷却不持久化（瞬态，冷却到期自动恢复）**。**手动检测**：`senseaudio.manageApiKeys` 命令 QuickPick 管理（增删/设为当前/绑定 cookie/重置失效/检测可用性——查余额 + 最小真实聊天请求 `say ok`，实测余额不足时 402 拦截不耗 token）。**UI 增强**：表单式批量导入（三元组 key/cookie/备注，逐条输入）、检测二级界面（列出全部 key 状态 + "检测所有"选项）、编辑 API Key（三字段 value/cookie/label，冲突校验）、**轮询模式下隐藏"设为当前使用"**（★ Current 标记与动作项均仅 single 模式显示）、批量导入时已存在 key 自动更新 cookie 不重复添加、**所有 key 管理界面（主界面 / 检测二级界面 / 删除·设当前·编辑·绑定·清除 cookie 的 key 选择界面）均显示每个 key 的两种余额 + 赠送余额有效期**（绑定 cookie 时经 `getBalanceDetailCached` TTL 缓存查询 `/api/usage-summary`：充值余额 `availableBalanceCny - expiringBalanceCny` 显示 `$(coin)/$(error) 充值 ¥X.XX`（> `minBalanceCny` 为 coin、≤ 为 error 即轮询会被跳过），赠送余额 `expiringBalanceCny` 显示 `$(gift) 赠送 ¥Y.YY`（> 0 时显示，附 `（至 YYYY-MM-DD）` 有效期，`nextExpiryAt` 本地时区格式化），查询失败显示 `$(warning) 余额未知`，未绑定 cookie 不显示余额）。**平台 Key 数量展示（2026-08-24）**：主界面 `render()`、检测二级界面 `showCheckMenu()` 与 key 选择界面 `pickKey()`（删除/设当前/编辑/绑定/清除 cookie 共用）均对绑定 cookie 的 key 经 `getApiKeysByCookieCached`（TTL 缓存，按 cookie 去重查询，避免多个 key 共享同一 cookie 时重复请求）查询 `GET /api/api-keys`，展示 `平台 Key：N / 10`（`status==="enabled"` 的 key 数量 / 平台上限 10，停用/删除的 key 不占上限）；查询失败显示 `$(warning) 平台 Key 数量未知`，未绑定 cookie 不显示。格式化逻辑集中在 `formatPlatformKeysText`（模块级函数），查询逻辑集中在 `fetchPlatformKeyListsByCookie`（按 cookie 去重）。**全部 key 用尽时**：轮换循环跟踪每个 key 的失败原因，报错列出脱敏 key + 原因（如 `sk_****abcd: 服务端繁忙 (503)`），并区分"瞬态失败请稍后重试"（429/503）与"确定性失败请检测"（402/401）；`pickNextApiKey` 无可用 key 的兜底报错同样列出每个 key 的原因（`buildAllKeysUnavailableDetail`）。**瞬态自动重试**：全部 key 均因瞬态错误（默认 429/503，状态码可配置 `senseaudio.transientRetryStatusCodes`，与触发轮换的状态码解耦）失败时，按 `senseaudio.transientRetryTimes`（默认 3）自动重试整轮——指数退避等待（2s/4s/8s，上限 8s）且**重试前清空瞬态冷却**（`resetExhaustedKeys(secrets,false)`，否则冷却期间 `pickNextApiKey` 会跳过全部 key 使重试无效），重试次数用尽后才报错。**瞬态判定（`isTransientRetryError`）**：错误命中瞬态重试状态码但原因非瞬态（如 500→`api_error` 但用户把 500 加入重试列表）时，规范化为 `server_error` 仅内存冷却不持久化，保证整轮重试可重新选 key。旧版单 key `senseaudio.apiKey` 自动迁移。`/v1/models` 实测不校验余额（余额 < 0 也 200），模型列表/启动同步用任意有效 key 即可 |
+| **多 API Key 轮询** | 支持多个 API Key（SecretStorage 加密存储 `senseaudio.apiKeys`），三种模式：`sticky`（默认，固定使用一个 key，仅失效时切下一个并钉住——前缀缓存命中率最高，切换后不自动切回）/ `rotation`（轮询使用、跳过不可用 key）/ `single`（仅用当前 key；`senseaudio.singleKeyFallback`（默认 `switch`）下**仅在余额不足（402）时**自动切换到下一个可用 key 并经 `setActiveKeyByValue` 设为当前使用 + 右下角弹窗提示——401 无效 Key / 429 限流 / 503 繁忙等其他错误不切换、走 single 专属报错文案；`error` 下任何错误都直接报错不切换）。**被动检测**：按请求错误（402 余额不足 / 401 无效 Key / 429 限流 / 503 服务端繁忙，状态码与文本 patterns 均可配置）判定 key 失效并切换——**402/401 持久化 `available=false`（确定性），429/503 仅内存冷却不持久化（瞬态，冷却到期自动恢复）**。**手动检测**：`senseaudio.manageApiKeys` 命令 QuickPick 管理（增删/设为当前/绑定 cookie/重置失效/检测可用性——最小真实聊天请求 `say ok`，实测余额不足时 402 拦截不耗 token）。**UI 增强**：表单式批量导入（三元组 key/cookie/备注，逐条输入）、检测二级界面（列出全部 key 状态 + "检测所有"选项）、编辑 API Key（三字段 value/cookie/label，冲突校验）、**轮询模式下隐藏"设为当前使用"**（★ Current 标记与动作项均仅 single 模式显示）、批量导入时已存在 key 自动更新 cookie 不重复添加、**所有 key 管理界面（主界面 / 检测二级界面 / 删除·设当前·编辑·绑定·清除 cookie 的 key 选择界面）均显示账号余额**（登录 PASETO token 经 `getAccountInfoCached` TTL 缓存查询 `platform.senseaudio.cn/api/user/self`，余额按**账号**粒度、所有 key 共享：现金余额显示 `$(coin)/$(error) 充值 ¥X.XX`（> `minBalanceCny` 为 coin、≤ 为 error），代金券可用显示 `$(gift) 赠送 ¥Y.YY`（> 0 时显示，附 `（至 YYYY-MM-DD）` 最早到期日，本地时区格式化），查询失败显示 `$(warning) 余额未知`）。**全部 key 用尽时**：轮换循环跟踪每个 key 的失败原因，报错列出脱敏 key + 原因（如 `sk_****abcd: 服务端繁忙 (503)`），并区分"瞬态失败请稍后重试"（429/503）与"确定性失败请检测"（402/401）；`pickNextApiKey` 无可用 key 的兜底报错同样列出每个 key 的原因（`buildAllKeysUnavailableDetail`）。**瞬态自动重试**：全部 key 均因瞬态错误（默认 429/500/503，状态码可配置 `senseaudio.transientRetryStatusCodes`，与触发轮换的状态码解耦）失败时，按 `senseaudio.transientRetryTimes`（默认 3）自动重试整轮——指数退避等待（2s/4s/8s，上限 8s）且**重试前清空瞬态冷却**（`resetExhaustedKeys(secrets,false)`，否则冷却期间 `pickNextApiKey` 会跳过全部 key 使重试无效），重试次数用尽后才报错。**平台侧错误不换 key**：500 Internal Server Error 是平台问题而非 key 问题——它命中瞬态重试但**不**命中轮换状态码，因此**不标记 key、不换 key**，仅退避后重试同一个 key（日志 `key.transientRetrySameKey`）。**瞬态判定（`isTransientRetryError`）**：错误命中瞬态重试状态码但原因非瞬态（如 500→`api_error`）时，规范化为 `server_error` 仅内存冷却不持久化，保证整轮重试可重新选 key。旧版单 key `senseaudio.apiKey` 自动迁移。`/v1/models` 实测不校验余额（余额 < 0 也 200），模型列表/启动同步用任意有效 key 即可 |
+| **云同步（GitHub Gist）** | key/cookie/备注 三元组跨机器云同步：使用 VS Code 内置的 GitHub 登录（`vscode.authentication.getSession("github", ["gist"])`，无需 PAT）获取 token，将三元组存储到一个**私密 Gist**（`public: false`，文件名 `senseaudio-keys.json`，description 标记 `senseaudio-copilot key sync (do not edit manually)`）。**手动推送**（`senseaudio.syncPush`）：本地 store → Gist（未登录时弹登录界面）；**手动拉取**（`senseaudio.syncPull`）：Gist → 本地 store；**启动自动拉取**（`senseaudio.cloudSyncAutoPull`，默认开启）：静默检查云端 `updatedAt` 是否比本地上次同步时间（`globalState` 的 `senseaudio.lastCloudSyncAt`）新，是则拉取覆盖本地并弹窗提示，未登录时静默跳过不弹登录界面。**Gist 定位**：优先 `globalState` 缓存的 gist id（`senseaudio.cloudSyncGistId`，PATCH 404 时回退）→ 按 description 标记遍历用户 Gist 列表（前 3 页）→ 均无则创建新 Gist。**合并策略（拉取）**：云端为源——按 key 值对齐，云端条目覆盖本地 cookie/label，云端有本地无的追加、本地有云端无的删除；**可用性状态（available/lastCheckedAt）为本地数据不同步**，按 key 值保留本地检测结果；activeIndex 按 key 值跟随。无变更时不写 store 仅更新同步时间戳。实现集中在 `src/cloud/cloudSync.ts` |
 | **多模型支持** | 内置 16 个模型定义，覆盖 6 大模型系列，统一通过推理强度选择器切换思考模式。支持自动模型发现：开启后从 API 获取模型列表，自动过滤不可用模型并发现新增模型 |
 | **自动模型发现** | 通过 `senseaudio.enableAutoModelDiscovery` 配置（默认开启）。启动时从 `/v1/models` 获取当前可用模型 ID 列表及能力标记（含 `supports_responses`），过滤内置模型列表（不可用模型自动隐藏）。新增模型元数据以 **`/v1/models` 完整元数据为主源**（`context_length` / `max_completion_tokens` / `supports_vision` / `supports_reasoning` / `supports_tools`），models.dev 仅提供友好名称与回退规格——**models.dev 未收录或拉取失败时不再降级为 128K 上下文 / 4096 输出兜底**（2026-09-03 修复：曾导致 glm-5.3-flash 等自动发现模型上下文显示缩水为 102K、4096 输出上限被推理耗尽后正文为空，Copilot Chat 报 "Sorry, no response was returned."）；两源均未知输出上限时不发送 `max_completion_tokens`（交由服务端默认值）。`thinkingMode` 从 `supports_reasoning` 推断（支持推理→switchable，不支持→always）。API 不可用时静默回退到全量内置列表。内存缓存（5 分钟 TTL）。**按 API 模式过滤**：模型列表还会按 `senseaudio.apiMode` 过滤——`auto`/`openai` 显示全部（所有模型均支持 OpenAI 格式），`anthropic` 仅显示 `supports_anthropic=true` 的模型，`responses` 仅显示 `supports_responses=true` 的模型；能力集合为空（API 探测失败）时回退显示全部。**动态刷新**：通过 `onDidChangeLanguageModelChatInformation` 事件（VS Code 1.125+），切换 `apiMode` / `enableAutoModelDiscovery` 设置时自动重新拉取模型列表并刷新选择器，**无需 reload 窗口** |
 | **启动模型同步** | 通过 `senseaudio.syncModelsOnStartup` 配置（默认开启）。每次 VS Code 打开时自动检查 API 是否有新模型，**每日最多同步一次**（`globalState` 记录上次同步日期）。同步结果以**一行日志**输出到「SenseAudio」输出通道（`models.sync` 标签，含状态/说明），**不写任何文件**（v1.7.0 起不再写工作区 `.copilot/model-sync-log.md`——该文件会污染用户仓库，见 issue #1）。无 API Key、API 不可用时记录失败事件且不标记为已同步（下次打开重试） |
@@ -40,12 +41,13 @@
 | **Token 计数** | 使用 `o200k_base` tiktoken 分词器精确统计 token 用量 |
 | **状态栏** | 实时显示当前会话 token 使用量、累计用量、缓存命中率 |
 | **原生 Token 指示器** | 始终启用，向 Copilot Chat 原生 Token 指示器报告 token 用量。通过发送 MIME 类型为 `usage` 的 `LanguageModelDataPart`（TextEncoder 编码 JSON）实现，无需自建状态栏。依赖 VS Code/Copilot Chat 1.116+ 对外部模型 `usage` data part 的识别 |
-| **高级 Token 指示器** | 可通过 `senseaudio.enableThirdPartyTokenIndicator` 配置（默认开启）控制 VS Code 状态栏中的高级Token计数器。关闭后仅显示原生指示器。状态栏**仅在用户实际使用本插件提供的模型时显示**：启动时隐藏，发起 senseaudio 模型请求时显示，停止使用（空闲 60 秒）后自动隐藏，避免使用其他模型时残留上下文信息 |
+| **高级 Token 指示器** | 可通过 `senseaudio.enableThirdPartyTokenIndicator` 配置（**默认关闭**）控制 VS Code 状态栏中的高级Token计数器。关闭后仅显示原生指示器（原生指示器始终上报）。**状态栏可见性由 `isStatusBarEnabled()` 决定 = 高级 Token 指示器 OR 套餐用量显示（`showUsageInStatusBar` / `showUsageInTooltip`）**——不能只用 `enableThirdPartyTokenIndicator` 把关，否则套餐用量功能将永远不可见。状态栏**仅在用户实际使用本插件提供的模型时显示**：启动时隐藏，发起 senseaudio 模型请求时显示，停止使用（空闲 60 秒）后自动隐藏，避免使用其他模型时残留上下文信息 |
+| **套餐用量与余额显示** | 状态栏主文本显示**套餐用量**（对标上游 opencode-go-copilot 的 `Go 5H 65%`）：额度内显示 `$(pulse) 5H 65%`（5 小时限流窗口），额度耗尽显示 `$(pulse) 余额 ¥358.78`；悬停提示展示 5h/周/月三窗口（`5H——0% (0 / 10,000 积分)`）+ 5h 重置倒计时 + 余额 + 计费模式说明。**两套计费规则严格区分**（官方文档 token-plan）：① **周期额度**（5h/周）是**限流窗口**，耗尽后等下一周期自动恢复、**不消耗余额**；② **套餐积分**（月度 `credit_30d_limit`）才是**订阅额度**，耗尽后走超额策略——`enable_extra_usage=true` 则按量计费（代金券→现金），否则**降级 Free 版**。三态 `billingMode`：`plan`/`extra`/`free`。数据源 `GET platform.senseaudio.cn/api/user/self`（Bearer 登录 PASETO token），TTL 缓存 + **失败保留旧快照**（静默降级）。后台轮询（`senseaudio.usageRefreshInterval` 默认 5 分钟）+ 点击状态栏/`senseaudio.checkUsage` 命令强制刷新。配置：`showUsageInStatusBar`（默认开，关闭则主文本改显 Token 计数）、`showUsageInTooltip`（默认开）。**⚠️ 单位陷阱**：代金券积分 `1 元 = 1,000,000 积分`（`POINTS_PER_CNY`，2026-09-27 实测校正，曾误用 5000 导致 200 倍误差），与套餐积分**不是同一单位**。实现见 `src/balance/planUsage.ts`，设计/移植指南见 `docs/plan-usage-design.md` |
 | **Git 提交消息生成** | 一键生成 Conventional Commit 格式的 Git 提交消息，支持 `auto` 语言模式自动从历史提交检测语言 |
 | **多仓库支持** | 支持多根工作区 (multi-root) 中多个 Git 仓库的提交消息生成 |
 | **模型预设** | 支持通过命令面板快速切换 temperature/top_p 预设（🎯 Precise/⚖️ Balanced/🔥 Creative），也支持手动自定义输入 |
 | **国际化** | 内置简体中文 (zh-cn) 中英文双语界面 |
-| **重试机制** | 可配置的指数退避重试策略，应对网络抖动和限流 (429) |
+| **重试机制** | **两层重试，职责分离**：① **HTTP 层**（`executeWithRetry`，`senseaudio.retry.*`）——同一请求退避重试，默认 2 次，仅覆盖**网关错误**（502/504）与网络错误；② **整轮层**（`tryTransientRetryRound`，`senseaudio.transientRetry*`）——重跑整个 key 轮换循环，默认 3 次，覆盖平台错误（429/500/503）。**两层刻意不重叠**：429/500/503 只走整轮层（可换 key 或重试同一 key），避免 `maxAttempts × (transientRetryTimes+1)` 次尝试导致长时间挂起 |
 | **请求延迟** | 可配置的请求间隔延迟，避免触发 API 限流 |
 | **超时控制** | 可配置的请求超时时间（默认 10 分钟） |
 | **立即取消** | 取消请求时通过 `reader.cancel()` 立即中断流式读取，停止后台接收 |
@@ -100,7 +102,7 @@
 │  ┌───────────────────────────────────────────────────────────────┐  │
 │  │  用户发送消息 → LanguageModelChatProvider                     │  │
 │  │                    ↓                                          │  │
-│  │  SenseAudioChatModelProvider (provider.ts)                    │  │
+│  │  SenseAudioChatModelProvider (provider/provider.ts)           │  │
 │  │   1. 获取模型配置 (getBuiltInModelConfig)                     │  │
 │  │   2. 获取 API Key (SecretStorage)                             │  │
 │  │   3. 计算 Token 用量 (provideToken → statusBar)               │  │
@@ -137,19 +139,30 @@
 activate(context)
   ├── logger.init()                         ← 创建 LogOutputChannel
   ├── TokenizerManager.initialize()         ← 加载 o200k_base.tiktoken
-  ├── initStatusBar()                       ← 创建状态栏条目
+  ├── initStatusBar()                       ← 创建状态栏条目（默认隐藏）
   ├── new SenseAudioChatModelProvider()      ← 创建 Provider 实例
   ├── vscode.lm.registerLanguageModelChatProvider("senseaudio", provider)
-  ├── 注册命令:
-  │   ├── senseaudio.setApiKey                ← 设置 API Key
-  │   ├── senseaudio.getApiKey                ← 打开 SenseAudio 官网获取 Key
-  │   ├── senseaudio.openSettings             ← 打开扩展设置页
-  │   ├── senseaudio.generateGitCommitMessage ← 生成提交消息
-  │   ├── senseaudio.abortGitCommitMessage    ← 中止生成
-  │   └── senseaudio.setModelPreset           ← 设置模型预设
+  ├── registerCommands(context, provider)    ← 委托 src/commands/registerCommands.ts
+  │   ├── onDidChangeConfiguration 监听       ← apiMode / enableAutoModelDiscovery 变化时刷新模型列表
+  │   └── 注册 12 条命令:
+  │       ├── senseaudio.setApiKey                ← 设置 API Key
+  │       ├── senseaudio.manageApiKeys            ← 多 Key 管理 QuickPick
+  │       ├── senseaudio.setVisionProxyModel      ← 选择视觉代理模型
+  │       ├── senseaudio.getApiKey                ← 打开 SenseAudio 官网获取 Key
+  │       ├── senseaudio.openSettings             ← 打开扩展设置页
+  │       ├── senseaudio.generateGitCommitMessage ← 生成提交消息
+  │       ├── senseaudio.abortGitCommitMessage    ← 中止生成
+  │       ├── senseaudio.setModelPreset           ← 设置模型预设
+  │       ├── senseaudio.syncPush                 ← 推送 key/cookie/备注 到云端 Gist
+  │       ├── senseaudio.syncPull                 ← 从云端 Gist 拉取 key/cookie/备注
+  │       └── senseaudio.checkUsage               ← 查询套餐用量与余额（也绑定状态栏点击）
   ├── syncModelsOnStartup(context)           ← 启动模型同步（每日最多一次，结果以一行日志输出）
+  ├── autoPullOnStartup(context)             ← 启动云同步自动拉取（静默，云端更新时覆盖本地）
   └── 注册 dispose 清理
 ```
+
+> `initStatusBar(context, getLoginToken)` 同时启动**套餐用量后台轮询**（`startUsagePolling`），
+> 状态栏主文本显示 5h 窗口用量、悬停提示显示三窗口 + 余额（见 4.15）。
 
 ### 2.3 聊天请求处理流程
 
@@ -206,23 +219,20 @@ provideLanguageModelChatResponse(model, messages, options, progress, token)
   │       ├── pickNextApiKey(secrets, apiKeyMode)
   │       │   ├── sticky → 从轮询游标环形扫描第一个可用 key，游标钉住不前移（固定使用；失效后切下一个并钉住，不自动切回）
   │       │   ├── rotation → 从轮询游标环形扫描第一个可用 key，游标前移
-  │       │   ├── single → active key；不可用且 singleKeyFallback=switch 且本轮原因为 balance（402/预检不足，shouldSingleKeyFallbackSwitch 判定）→ 降级 rotation 选下一个可用 key + setActiveKeyByValue 设为当前 + 成功后弹窗提示；其他原因（401/429/503）不切换 → single 专属报错
+  │       │   ├── single → active key；不可用且 singleKeyFallback=switch 且本轮原因为 balance（402，shouldSingleKeyFallbackSwitch 判定）→ 降级 rotation 选下一个可用 key + setActiveKeyByValue 设为当前 + 成功后弹窗提示；其他原因（401/429/503）不切换 → single 专属报错
   │       │   └── 全部不可用 → 报错列出脱敏 key+原因（buildAllKeysUnavailableDetail，如 `sk_****abcd: 服务端繁忙 (503)`）
-  │       ├── 主动余额预检（balanceCheckEnabled 且有 cookie）:
-  │       │   ├── checkKeyBalance(cookie) → 按 cookie 粒度查 /api/usage-summary（TTL 缓存），返回余额值供日志记录
-  │       │   ├── 余额 ≤ minBalanceCny（默认 0，即余额 ≤ 0 视为不足）→ markApiKeyExhausted(balance) + continue 换下一个 key
-  │       │   └── 曾标记不可用但余额恢复 → markApiKeyAvailable（自愈）
-  │       ├── 用当前 key 构造 requestHeaders → _executeApiRequest()（见步骤 10 协议分发）
+  │       ├── 用当前 key 构造 requestHeaders → executeApiRequest()（见步骤 10 协议分发）
   │       ├── 成功 → break 循环；曾不可用 → 自愈置可用
   │       └── 失败: isKeyRotationError(err)（状态码 [401]/[402]/[429]/[503] 或文本 patterns 可配置）
-  │           ├── isTransientRetryError(err)（状态码匹配 transientRetryStatusCodes，默认 [429,503]）→ reason 规范化为瞬态（仅内存冷却不持久化）
+  │           ├── isTransientRetryError(err)（状态码匹配 transientRetryStatusCodes，默认 [429,500,503]）→ reason 规范化为瞬态（仅内存冷却不持久化）
   │           ├── getKeyRotationReason(err) → 402/401 → markApiKeyExhausted(持久化 available=false) + continue 换 key
   │           ├── 429/503 → markApiKeyExhausted(仅内存冷却，不持久化) + continue 换 key
-  │           ├── 取消/超时/其他错误（400/403/500/网络/IMAGE_SENSITIVE）→ 抛给外层 catch，不轮换
+  │           ├── 取消/超时/其他错误（400/403/网络/IMAGE_SENSITIVE）→ 抛给外层 catch，不轮换
+  │           ├── **500 等平台侧瞬态错误（命中重试但未命中轮换）→ 不标记 key、不换 key，退避后重试同一 key**
   │           └── failedKeys.size >= keys.length → 报错：列出脱敏 key+原因；含瞬态(429/503)提示"请稍后重试"，否则提示"用管理命令检测"
   │               └── 瞬态且未达 transientRetryTimes 上限 → 清空瞬态冷却 + 指数退避等待(2s/4s/8s) + 清空 failedKeys + continue 重试整轮
   │
-  ├── 10. 根据 apiMode 路由（_executeApiRequest）:
+  ├── 10. 根据 apiMode 路由（executeApiRequest）:
   │
   │     ├── OpenAI 模式:
   │     │   ├── OpenaiApi.convertMessages()    ← 消息格式转换
@@ -233,7 +243,7 @@ provideLanguageModelChatResponse(model, messages, options, progress, token)
   │     │       ├── SSE 行解析 ("data: ...")
   │     │       ├── processDelta() → 处理每个 delta
   │     │       │   ├── 推理内容 (thinking/reasoning/reasoning_content)
-  │     │       │   ├── XML think 块解析 (꽁...꽁)
+  │     │       │   ├── XML think 块解析 (<think>...</think>)
   │     │       │   ├── 文本内容 → LanguageModelTextPart
   │     │       │   └── 工具调用 → LanguageModelToolCallPart
   │     │       └── 用量统计 (usage chunk)
@@ -268,7 +278,7 @@ provideLanguageModelChatResponse(model, messages, options, progress, token)
   │                 └── response.completed → usage 统计
   │
   ├── 11. 图片代理拦截处理:
-  │       └── _handleInterceptedToolCall()
+  │       └── handleInterceptedToolCall()
   │           ├── 检查 interceptedToolCall（循环，最多 visionMaxRounds 次）
   │           ├── 发出同一 thinking 块: "正在根据图片提问：[问题]" + 视觉模型流式输出
   │           ├── 调用 callVisionModel() 获取描述（可选实时转发文本到 thinking 块）
@@ -309,7 +319,7 @@ provideLanguageModelChatResponse(model, messages, options, progress, token)
 处理机制:
   1. bufferThinkingContent(text) → 积累到 _thinkingBuffer
   2. 每 100ms 定时刷新 → LanguageModelThinkingPart
-  3. XML think 块 (꽁...꽁) → processXmlThinkBlocks()
+  3. XML think 块 (<think>...</think>) → processXmlThinkBlocks()
   4. 文本内容出现时 → reportEndThinking()
 
 回传机制 (OpenAI 模式 convertMessages):
@@ -361,7 +371,7 @@ provideLanguageModelChatResponse(model, messages, options, progress, token)
   │      ask_image 和 ask_with_multi_image 被缓存到 interceptedToolCall（不在 progress 中发出）
   │      tryEmitBufferedToolCall() 和 flushToolCallBuffers() 同时跳过 ask_image/ask_with_multi_image
   │
-  └── 5. _handleInterceptedToolCall() 循环（多轮追问）
+  └── 5. handleInterceptedToolCall() 循环（多轮追问）
          for round = 1 to visionMaxRounds:
            ├── 读取 interceptedToolCall
            ├── 发出 LanguageModelThinkingPart("正在根据图片提问：[问题]\n...")
@@ -420,7 +430,6 @@ generateCommitMsg(secrets, scm?)
   │   └── Git Diff 内容
   ├── 调用 API（多 key 轮换循环）:
   │   ├── ensureApiKeyEntry → pickNextApiKey (rotation/sticky/single + fallback：single 仅余额不足(402)时切换并设为当前)
-  │   ├── 余额预检（cookie）
   │   ├── OpenaiApi.createMessage() / AnthropicApi.createMessage() / ResponsesApi.createMessage()
   │   ├── 流式输出到 SCM InputBox
   │   └── 轮换错误 → 换 key 重试（已有部分输出则不换）；用户取消 → 中止
@@ -433,121 +442,193 @@ generateCommitMsg(secrets, scm?)
 
 ### 3.1 目录结构
 
+> **2026-09-27 结构重构**：`src/` 按职责分类到子目录（`api/` `provider/` `keys/` `balance/` `models/` `commands/` `core/` `ui/` `cloud/` `typings/`），
+> 三个巨型文件（`provider.ts` 1410 行 / `extension.ts` 1015 行 / `keyManager.ts` 636 行）已拆分；
+> 三协议适配器重复的 SSE 解析与取消回调上提到 `api/sse.ts`。
+> `scripts/` 按用途分为 `build/`（构建）与 `dev/`（调试），测试脚本统一移入 `test/`。
+
 ```
 src/
-├── apiModelList.ts                       # API 模型列表获取
-├── balanceCheck.ts                       # 余额查询（cookie /api/usage-summary）+ 平台 Key 列表查询（cookie /api/api-keys），TTL 缓存，手动检测
-├── commonApi.ts                          # API 抽象基类
-├── extension.ts                          # 扩展入口 (activate/deactivate)，含 manageApiKeys QuickPick 管理
-├── keyManager.ts                         # 多 API Key 管理（存储/迁移/轮询选择/失效状态/轮换判定/脱敏）
-├── localize.ts                           # 国际化/本地化
-├── logger.ts                             # 日志系统
-├── models.ts                             # 内置模型定义清单
-├── modelsDev.ts                          # models.dev 元数据拉取与查询
-├── modelSync.ts                          # 启动模型同步（每日一次，结果以一行日志输出到 Output 通道）
-├── provideModel.ts                       # 模型信息提供函数（含自动发现）
-├── provider.ts                           # Chat 模型提供商 (核心主文件，含多 key 轮换循环)
-├── provideToken.ts                       # Token 计数函数
-├── statusBar.ts                          # 状态栏管理
-├── types.ts                              # TypeScript 类型定义
-├── utils.ts                              # 通用工具函数
-├── versionManager.ts                     # 版本信息管理
-├── openai/
-│   ├── openaiApi.ts                      # OpenAI 兼容 API 实现
-│   └── openaiTypes.ts                    # OpenAI 类型定义
-├── anthropic/
-│   ├── anthropicApi.ts                   # Anthropic API 实现
-│   └── anthropicTypes.ts                 # Anthropic 类型定义
-├── responses/
-│   ├── responsesApi.ts                   # Responses API 实现 (POST /v1/responses)
-│   └── responsesTypes.ts                 # Responses 类型定义
+├── extension.ts                          # 扩展入口（仅编排：初始化 + 注册 Provider + 委托命令注册 + 启动任务）
+├── api/                                  # 协议适配层
+│   ├── commonApi.ts                      # API 抽象基类（图片存储、工具调用拦截、thinking 缓冲）
+│   ├── sse.ts                            # 共享 SSE 流解析（iterateSseEvents / consumeSseStream）
+│   ├── openai/
+│   │   ├── openaiApi.ts                  # OpenAI 兼容 API 实现
+│   │   └── openaiTypes.ts                # OpenAI 类型定义
+│   ├── anthropic/
+│   │   ├── anthropicApi.ts               # Anthropic API 实现
+│   │   └── anthropicTypes.ts             # Anthropic 类型定义
+│   └── responses/
+│       ├── responsesApi.ts               # Responses API 实现 (POST /v1/responses)
+│       └── responsesTypes.ts             # Responses 类型定义
+├── provider/                             # Chat Provider 实现
+│   ├── provider.ts                       # SenseAudioChatModelProvider（VS Code 接口 + 请求编排）
+│   ├── requestOptions.ts                 # 推理强度 / temperature / apiMode 决策
+│   ├── rotation.ts                       # 多 key 轮换循环（瞬态整轮重试）
+│   ├── apiDispatch.ts                    # 三协议分发与流式处理
+│   ├── visionRounds.ts                   # ask_image 图片代理多轮（含三协议轮次构建）
+│   └── errors.ts                         # 错误文案、瞬态重试、原生 token 指示器、零正文检测
+├── keys/                                 # 多 API Key 管理
+│   ├── keyManager.ts                     # barrel（统一导出，保持既有导入路径）
+│   ├── types.ts                          # ApiKeyEntry / ApiKeyStore / ApiKeyMode / SingleKeyFallback
+│   ├── config.ts                         # 模式、状态码、patterns、冷却与重试次数配置
+│   ├── state.ts                          # 模块级可变状态（store 缓存、轮询游标、瞬态冷却表）
+│   ├── store.ts                          # SecretStorage 读写、旧版单 key 迁移、增删改
+│   ├── selection.ts                      # 主 key 获取、轮询/粘性选择、single fallback 判定
+│   ├── health.ts                         # 瞬态冷却、轮换错误判定、失效原因、状态更新
+│   └── mask.ts                           # 脱敏显示辅助
+├── balance/                              # 余额 / 账号
+│   ├── balanceCheck.ts                   # barrel（统一导出）
+│   ├── config.ts                         # 阈值 / TTL 配置与通用工具
+│   ├── accountInfo.ts                    # 平台用户中心账号信息（登录 PASETO token）+ 到期日格式化 + POINTS_PER_CNY
+│   ├── planUsage.ts                      # 套餐用量快照（5h/周/月窗口 + 余额 + 计费模式，对标上游 goUsage.ts）
+│   └── availability.ts                   # key 可用性手动检测（最小真实聊天请求）
+├── models/                               # 模型定义与发现
+│   ├── models.ts                         # 内置模型定义清单
+│   ├── modelsDev.ts                      # models.dev 元数据拉取与查询
+│   ├── apiModelList.ts                   # API 模型列表获取（/v1/models）
+│   ├── modelSync.ts                      # 启动模型同步（每日一次，一行日志）
+│   └── provideModel.ts                   # 模型信息提供函数（含自动发现）
+├── commands/                             # 命令与 QuickPick UI
+│   ├── registerCommands.ts               # 全部命令注册 + 配置变更监听
+│   ├── apiKeyManagerUi.ts                # manageApiKeys QuickPick 管理 + 账号余额展示辅助
+│   ├── checkUsageCommand.ts              # 套餐用量查询命令（senseaudio.checkUsage）
+│   ├── visionProxyCommand.ts             # 视觉代理模型选择
+│   └── modelPresetCommand.ts             # 模型温度预设选择
+├── core/                                 # 基础设施
+│   ├── logger.ts                         # 日志系统
+│   ├── localize.ts                       # 国际化/本地化
+│   ├── types.ts                          # TypeScript 类型定义
+│   ├── utils.ts                          # 通用工具函数
+│   └── versionManager.ts                 # 版本信息管理
+├── ui/
+│   └── statusBar.ts                      # 状态栏管理（受 enableThirdPartyTokenIndicator 控制）
+├── cloud/
+│   └── cloudSync.ts                      # 云同步（GitHub Gist）：推送/拉取/启动自动拉取
 ├── gitCommit/
 │   ├── commitMessageGenerator.ts         # Git 提交消息生成
 │   └── gitUtils.ts                       # Git 工具函数
 ├── tokenizer/
 │   ├── tokenizerManager.ts               # Tokenizer 管理 (o200k_base)
+│   ├── provideToken.ts                   # Token 计数函数
 │   └── imageUtils.ts                     # 图片尺寸解析
 ├── vision/
 │   ├── types.ts                          # Vision proxy 类型定义
 │   ├── historyCodec.ts                   # 跨轮视觉历史编解码（serialize/deserialize/toOpenAI/toAnthropic）
 │   ├── historyPart.ts                    # 跨轮视觉历史 DataPart 创建/解析（私有 MIME）
 │   └── imageProxy.ts                     # 图片代理核心 (ask_image)
-└── resources/
-    └── walkthrough/                      # 安装欢迎页 (Walkthrough) 文档
-        ├── set-api-key.md                # 步骤 1：设置 API Key
-        ├── set-api-key.nls.zh-cn.md      # 步骤 1 中文版
-        ├── show-models.md                # 步骤 2：显示模型
-        ├── show-models.nls.zh-cn.md      # 步骤 2 中文版
-        ├── advanced-settings.md          # 步骤 3：高级设置
-        └── advanced-settings.nls.zh-cn.md# 步骤 3 中文版
+└── typings/                              # VS Code proposed API 类型声明（仅编译期）
+    ├── vscode.proposed.chatProvider.d.ts
+    ├── vscode.proposed.languageModelDataPart.d.ts
+    └── vscode.proposed.languageModelThinkingPart.d.ts
+
+resources/
+└── walkthrough/                          # 安装欢迎页 (Walkthrough) 文档
+    ├── set-api-key.md                    # 步骤 1：设置 API Key
+    ├── set-api-key.nls.zh-cn.md          # 步骤 1 中文版
+    ├── show-models.md                    # 步骤 2：显示模型
+    ├── show-models.nls.zh-cn.md          # 步骤 2 中文版
+    ├── advanced-settings.md              # 步骤 3：高级设置
+    └── advanced-settings.nls.zh-cn.md    # 步骤 3 中文版
 
 scripts/
-├── tsconfig.json                        # scripts 独立编译配置（输出到 scripts/out）
-├── build-info.mjs                       # 编译元信息生成（out/build-info.json + .copilot/build-log.md，compile 后自动运行）
-├── package-vsix.mjs                     # VSIX 打包（npm run build），输出名固定 <name>-<version>.vsix
-├── check-new-models.mjs                 # 检查 API 新模型
-├── copy-tokenizer.js                    # 拷贝 tokenizer 资源
-├── export-call-logs.mjs                 # 导出全部调用日志为 CSV（cookie 认证）
-├── analyze-call-logs.mjs                # 分析调用日志 CSV（按模型/Key/状态/协议/小时统计）
-├── test-vision-history.mjs              # 跨轮视觉历史编解码 + 双 API 转换器闭环测试（源自上游 opencode-go-copilot v1.9.2）
-├── test-anthropic-tool-result-merge.mjs # Anthropic 连续工具结果合并测试（源自上游 opencode-go-copilot v1.9.2）
-└── cookieApi/
-    ├── types.ts                         # 用户中心 API 类型定义（UsageSummary/CallLog 等）
-    ├── cookieApi.ts                     # 用户中心 API 客户端（cookie 认证：余额/调用日志）
-    └── cli.ts                           # 用户中心查询 CLI（临时调试用）
+├── build/                                # 构建相关
+│   ├── build-info.mjs                    # 编译元信息生成（out/build-info.json + .copilot/build-log.md，compile 后自动运行）
+│   ├── package-vsix.mjs                  # VSIX 打包（npm run build），输出名固定 <name>-<version>.vsix
+│   └── copy-tokenizer.js                 # 拷贝/下载 tokenizer 资源（postinstall）
+└── dev/                                  # 开发调试
+    ├── check-new-models.mjs              # 检查 API 新模型
+    ├── check-settings.mjs                # 设置项一致性核对（声明 vs 使用，挂到 compile）
+    └── audit-all.mjs                     # 完整审计（npm run audit，7 项检查）
 
-test/
-├── api-tests.mjs                        # 三协议 API 完整测试脚本（OpenAI/Anthropic/Responses，第 9b 项含生产 400 回归用例）
-└── README.md                            # 测试说明与平台差异记录（含 Responses 扁平化问题）
+test/                                     # 测试脚本（运行前需 npm run compile）
+├── api-tests.mjs                         # 三协议 API 完整测试（OpenAI/Anthropic/Responses，第 9b 项含生产 400 回归用例）
+├── test-vision-history.mjs               # 跨轮视觉历史编解码 + 双 API 转换器闭环测试
+├── test-anthropic-tool-result-merge.mjs  # Anthropic 连续工具结果合并测试（issue #87 场景）
+├── test-apply-token.mjs                  # 令牌应用测试
+├── test-banned-detect.mjs                # 封号检测测试
+├── test-banned-rotation.mjs              # 封号轮换测试
+├── test-model-diff.mjs                   # 模型差异测试
+├── test-responses-recheck.mjs            # Responses 协议复检
+├── test-vision-check.mjs                 # 视觉能力检查
+└── README.md                             # 测试说明与平台差异记录（含 Responses 扁平化问题）
 
 .copilot/
-└── build-log.md                        # 编译日志（每次 npm run compile 由 build-info.mjs 追加，含版本号+时区）
+└── build-log.md                          # 编译日志（每次 npm run compile 由 scripts/build/build-info.mjs 追加，含版本号+时区）
 ```
 
 ### 3.2 文件详细说明
 
 | 文件 | 行数 | 职责 |
 |------|------|------|
-| `extension.ts` | ~870 | 扩展激活/停用，注册 Provider 和 7 条命令，`manageApiKeys` QuickPick 管理（增删/批量导入/设为当前（仅 single 模式）/绑定 cookie/重置失效/检测可用性/编辑 key/**余额显示**） |
-| `provider.ts` | ~1290 | 实现 `LanguageModelChatProvider`，处理聊天请求全流程（三协议路由、多 key 轮换循环、余额预检、被动切换）及图片代理多轮循环处理 |
-| `keyManager.ts` | ~500 | 多 API Key 管理：SecretStorage 存取与旧 key 迁移、sticky/rotation/single 选择逻辑、可用性状态（持久化 available + 瞬态冷却）、轮换错误判定、脱敏、批量添加（addApiKeys）、三字段编辑（updateApiKey） |
-| `balanceCheck.ts` | ~260 | 余额查询：cookie 认证 `GET /api/usage-summary`、TTL 缓存、`checkKeyBalance` 预检（返回余额值供日志/UI 展示）、`isKeyBalanceSufficient` 快捷判断、`testKeyAvailability` 手动检测（查余额 + 最小聊天请求）；**平台 Key 列表查询**：`GET /api/api-keys`（仅需 tr_session，无 CSRF）、`queryApiKeysByCookie`/`getApiKeysByCookieCached`（TTL 缓存，返回含 id/name/maskedKey/status 等的完整列表，供 UI 展示 "平台 Key：N / 10"） |
-| `models.ts` | ~240 | 16 个内置模型定义（含 glm-5.3/glm-5.3-flash，2026-09-03），模型配置查询（所有模型声明 `imageInput: true`） |
-| `types.ts` | ~95 | `SenseAudioModelItem`, `ModelPreset`, `ModelsResponse`, `RetryConfig` 等类型 |
-| `apiModelList.ts` | ~120 | API 模型列表获取：从 `/v1/models` 拉取可用模型 ID 及能力标记（含 `supports_responses`），5 分钟缓存，静默降级 |
-| `modelsDev.ts` | ~130 | models.dev 元数据拉取与查询：从 `models.dev/models.json` 下载并索引模型规格，支持短 ID 匹配，1 小时缓存 |
-| `modelSync.ts` | ~90 | 启动模型同步：每日最多一次检查 API 新模型（`globalState` 记录日期），同步结果以一行日志输出到「SenseAudio」Output 通道（`models.sync` 标签），**不写文件**（v1.7.0 移除工作区 `.copilot/model-sync-log.md`，见 issue #1），无 Key/API 不可用记录失败且不标记已同步 |
-| `commonApi.ts` | ~462 | `CommonApi<TMessage,TRequestBody>` 抽象基类（图片存储、工具调用拦截） |
-| `provideModel.ts` | ~130 | 模型信息提供函数（含自动发现）：过滤内置模型、从 API 和 models.dev 自动发现新增模型 |
-| `provideToken.ts` | ~100 | Token 用量计算 |
-| `utils.ts` | ~285 | 工具函数 (重试、角色映射、工具转换等) |
-| `statusBar.ts` | ~140 | 状态栏创建、更新、累计计数器 |
-| `logger.ts` | ~55 | 日志输出 (LogOutputChannel) |
-| `localize.ts` | ~109 | 中英文国际化 |
-| `versionManager.ts` | ~35 | 扩展版本信息 |
-| `openai/openaiApi.ts` | ~613 | OpenAI 格式 API 实现 (消息转换/请求构建/流式处理/图片代理/跨轮视觉历史重建) |
-| `openai/openaiTypes.ts` | ~75 | OpenAI 类型定义 |
-| `anthropic/anthropicApi.ts` | ~535 | Anthropic 格式 API 实现 (消息转换/请求构建/流式处理/图片代理/跨轮视觉历史重建/**连续工具结果合并**) |
-| `anthropic/anthropicTypes.ts` | ~130 | Anthropic 类型定义 |
-| `responses/responsesApi.ts` | ~600 | Responses API 格式实现 (消息转换/请求构建/流式处理/图片代理/文本化工具回填) |
-| `responses/responsesTypes.ts` | ~130 | Responses 类型定义 |
-| `gitCommit/commitMessageGenerator.ts` | ~295 | Git 提交消息生成逻辑 |
-| `gitCommit/gitUtils.ts` | ~260 | Git 命令封装 |
-| `cookieApi/types.ts` | ~150 | 用户中心 API 类型定义（`UsageSummary`, `CallLog`, `CallLogPage`, `CallLogQueryParams`, `CallLogStats`, `ApiResponse`） |
-| `cookieApi/cookieApi.ts` | ~190 | 用户中心 API 客户端：基于 session cookie（`tr_session`）查询余额（`/api/usage-summary`）与调用日志（`/api/call-logs/page`），含自动翻页与统计汇总 |
-| `cookieApi/cli.ts` | ~140 | 用户中心查询 CLI（临时调试用）：`node scripts/out/cookieApi/cli.js <tr_session值> [startAt] [endAt]`（编译：`npx tsc -p scripts/tsconfig.json`） |
-| `export-call-logs.mjs` | ~80 | 导出全部调用日志为 CSV（`$env:TR_SESSION="<cookie>"; node scripts/export-call-logs.mjs [startAt] [endAt] [outFile]`） |
-| `analyze-call-logs.mjs` | ~110 | 分析调用日志 CSV 并输出统计（按模型/Key/状态/协议/小时/单次成本 TOP5）：`node scripts/analyze-call-logs.mjs [csv路径]` |
-| `test-vision-history.mjs` | ~150 | 跨轮视觉历史编解码 + 双 API 转换器闭环测试（源自上游 opencode-go-copilot v1.9.2，含 DeepSeek 空 reasoning_content 回归用例；运行前需 `npm run compile`） |
-| `test-anthropic-tool-result-merge.mjs` | ~170 | Anthropic 连续工具结果合并测试（源自上游，issue #87 场景：3 个并行 tool_use 结果合并为单条 user 消息；运行前需 `npm run compile`） |
-| `build-info.mjs` | ~90 | 编译元信息生成：`npm run compile` 后自动运行，写入 `out/build-info.json`（版本号 + 编译时间，标注 IANA 时区与 UTC 偏移）并追加 `.copilot/build-log.md`（编译日志） |
-| `package-vsix.mjs` | ~20 | VSIX 打包脚本（`npm run build`）：从 `package.json` 读取版本号，输出名固定为 `senseaudio-copilot-<version>.vsix`（如 `senseaudio-copilot-1.10.0.vsix`，发布命名规范，不用 vsce 默认的 `extension.vsix`） |
-| `tokenizer/tokenizerManager.ts` | ~115 | o200k_base 分词器管理 (含 LRU 缓存) |
-| `tokenizer/imageUtils.ts` | ~130 | 图片尺寸解析 (PNG/GIF/JPEG/WebP) |
-| `vision/types.ts` | ~53 | Vision proxy 类型定义（`StoredImage`, `InterceptedToolCall`, `ASK_IMAGE_TOOL_DEF`, `ASK_IMAGE_TOOL_NAME`, `ASK_WITH_MULTI_IMAGE_TOOL_DEF`, `ASK_WITH_MULTI_IMAGE_TOOL_NAME`, `DEFAULT_VISION_PROMPT`） |
-| `vision/historyCodec.ts` | ~150 | 跨轮视觉历史编解码（源自上游 opencode-go-copilot v1.9.2）：`VISION_TOOL_HISTORY_MIME`、`VisionToolHistoryEntry`、`serializeVisionToolHistory`、`deserializeVisionToolHistory`、`toOpenAIVisionToolMessages`、`toAnthropicVisionToolMessages` |
-| `vision/historyPart.ts` | ~28 | 跨轮视觉历史 DataPart 创建/解析（源自上游）：`createVisionToolHistoryPart`、`parseVisionToolHistoryPart` |
-| `vision/imageProxy.ts` | ~130 | 图片代理核心：调用视觉模型描述图片（`callVisionModel`/`callVisionModelMulti`），**仅在本供应商（senseaudio）内查找视觉模型**（`findVisionModel` 多级回退，修复 issue #3），支持 thinking 模式配置和文本流式转发 |
+| `extension.ts` | ~42 | 扩展激活/停用。**仅编排**：初始化日志/分词器/状态栏、注册 Provider、委托 `registerCommands()`、触发启动任务（模型同步 / 云同步自动拉取） |
+| `api/commonApi.ts` | ~445 | `CommonApi<TMessage,TRequestBody>` 抽象基类（图片存储、工具调用拦截、thinking 缓冲、流式状态重置）；新增 `localImages` / `originalApiMessages` / `systemContent` / `capturedReasoningContent` 公共访问器供视觉代理使用 |
+| `api/sse.ts` | ~148 | **共享 SSE 流解析**（2026-09-27 新增）：`iterateSseEvents()` 异步生成器 + `consumeSseStream()` 回调式消费，统一 reader 生命周期、`data:` 前缀解析、`[DONE]` 哨兵、取消回调注册与 finally 清理。三协议适配器共用，消除 5 处重复 |
+| `api/openai/openaiApi.ts` | ~571 | OpenAI 格式 API 实现 (消息转换/请求构建/流式处理/图片代理/跨轮视觉历史重建)；`captureUsage()` 独立处理用量（OpenAI + DeepSeek 两种格式） |
+| `api/openai/openaiTypes.ts` | ~66 | OpenAI 类型定义 |
+| `api/anthropic/anthropicApi.ts` | ~549 | Anthropic 格式 API 实现 (消息转换/请求构建/流式处理/图片代理/跨轮视觉历史重建/**连续工具结果合并**) |
+| `api/anthropic/anthropicTypes.ts` | ~119 | Anthropic 类型定义 |
+| `api/responses/responsesApi.ts` | ~586 | Responses API 格式实现 (消息转换/请求构建/流式处理/图片代理/文本化工具回填) |
+| `api/responses/responsesTypes.ts` | ~117 | Responses 类型定义 |
+| `provider/provider.ts` | ~341 | `SenseAudioChatModelProvider`：VS Code 接口实现（`provideLanguageModelChatInformation` / `provideTokenCount` / `provideLanguageModelChatResponse`）+ 请求编排（模型配置解析、延迟、超时、取消、错误分类、状态栏生命周期）。具体逻辑委托给同目录模块 |
+| `provider/requestOptions.ts` | ~106 | 请求参数决策：`applyReasoningEffort()`（thinking 模式）、`applyTemperature()`（预设/自定义/fixedTopP）、`resolveApiMode()`（auto 模式能力探测） |
+| `provider/rotation.ts` | ~196 | `runKeyRotationLoop()`：多 key 轮换循环（选 key → 执行 → 轮换错误换 key / 瞬态整轮退避重试 / 全部失败报错列脱敏原因） |
+| `provider/apiDispatch.ts` | ~221 | `executeApiRequest()`：三协议分发（openai/anthropic/responses）、请求体构建、`executeWithRetry`、流式处理、零正文预算耗尽检测、视觉代理后续轮次触发 |
+| `provider/visionRounds.ts` | ~528 | `handleInterceptedToolCall()`：ask_image 图片代理多轮（thinking 块展示提问 + 视觉模型流式转发 + 跨轮历史 DataPart + 三协议轮次构建 `runOpenAIRound`/`runAnthropicRound`/`runResponsesRound`） |
+| `provider/errors.ts` | ~136 | `REASON_TEXT`、`buildAllKeysUnavailableDetail()`、`tryTransientRetryRound()`、`checkZeroAnswerBudgetExhausted()`、`reportNativeUsage()`、`getRequestedReasoningEffort()` |
+| `keys/keyManager.ts` | ~56 | barrel：统一导出 `keys/` 下全部 API（保持既有 `../keys/keyManager` 导入路径不变） |
+| `keys/types.ts` | ~34 | `ApiKeyEntry` / `ApiKeyStore` / `ApiKeyMode` / `SingleKeyFallback` / `KeyDisplayStatus` |
+| `keys/config.ts` | ~61 | 模式、轮换状态码、错误 patterns、瞬态重试状态码、冷却时长、重试次数配置读取 |
+| `keys/state.ts` | ~30 | 模块级可变状态：store 缓存、轮询游标、瞬态冷却表（独立成文件避免循环依赖） |
+| `keys/store.ts` | ~194 | SecretStorage 读写与旧版单 key 迁移、`addApiKey`/`addApiKeys`/`removeApiKey`/`setActiveKey`/`setKeyCookie`/`updateApiKey` |
+| `keys/selection.ts` | ~110 | `getPrimaryApiKey` / `pickNextApiKey`（rotation 前移 / sticky 钉住）/ `shouldSingleKeyFallbackSwitch` / `setActiveKeyByValue` |
+| `keys/health.ts` | ~216 | 瞬态冷却（`getTransientExhaustedInfo`）、`isApiKeyEligible`、`isKeyRotationError`、`isTransientRetryError`、`getKeyRotationReason`、`getKeyUnavailableReason`、`markApiKeyExhausted`/`markApiKeyAvailable`/`updateKeyAvailability`/`resetExhaustedKeys`、`getKeyDisplayStatus` |
+| `keys/mask.ts` | ~18 | `maskApiKey` / `maskCookie` 脱敏 |
+| `balance/balanceCheck.ts` | ~21 | barrel：统一导出 `balance/` 下全部 API |
+| `balance/config.ts` | ~26 | 余额阈值 / TTL 配置读取 + `toNumber`（金额字符串转 number 防御） |
+| `balance/accountInfo.ts` | ~200 | 平台用户中心账号信息：`queryAccountInfo`（`GET platform.senseaudio.cn/api/user/self`，Bearer PASETO token）、`getAccountInfoWithStatus`（带状态：ok/unauthorized/error）、`getAccountInfoCached`（TTL 缓存）、`formatExpiryDate`（代金券到期日）、`POINTS_PER_CNY`（1 元 = 1,000,000 积分）、`AccountInfo` / `PlanUsageWindow` 类型 |
+| `balance/planUsage.ts` | ~330 | **套餐用量快照**（对标上游 `goUsage.ts`）：`buildSnapshot`（归一化 + 三态 `billingMode`）、`getPlanUsageCached`（TTL 缓存 + 失败保留旧值）、`getPlanUsageSnapshot`（同步读缓存）、`classifyWindow`（宽容匹配各平台 key 命名）、`getWindowPercent`（不截断）、`isPlanExhausted`（**只看月度额度窗口**）、`formatResetDuration` / `formatWindowLine` / `formatUsageSummary` / `formatBillingModeLine` / `formatBalanceSummary` |
+| `balance/availability.ts` | ~66 | `testKeyAvailability`（最小真实聊天请求 `say ok` + `max_tokens=8`，402→余额不足 / 401→无效） |
+| `models/models.ts` | ~265 | 16 个内置模型定义（含 glm-5.3/glm-5.3-flash，2026-09-03），模型配置查询（所有模型声明 `imageInput: true`） |
+| `models/modelsDev.ts` | ~161 | models.dev 元数据拉取与查询：从 `models.dev/models.json` 下载并索引模型规格，支持短 ID 匹配，1 小时缓存 |
+| `models/apiModelList.ts` | ~202 | API 模型列表获取：从 `/v1/models` 拉取可用模型 ID 及能力标记（含 `supports_responses`），5 分钟缓存，静默降级 |
+| `models/modelSync.ts` | ~83 | 启动模型同步：每日最多一次检查 API 新模型（`globalState` 记录日期），同步结果以一行日志输出到「SenseAudio」Output 通道（`models.sync` 标签），**不写文件**（v1.7.0 移除工作区 `.copilot/model-sync-log.md`，见 issue #1），无 Key/API 不可用记录失败且不标记已同步 |
+| `models/provideModel.ts` | ~280 | 模型信息提供函数（含自动发现）：**先读 `enableAutoModelDiscovery` 开关**（关闭则直接用内置列表）、过滤内置模型、从 API 和 models.dev 自动发现新增模型、按 apiMode 过滤 |
+| `commands/registerCommands.ts` | ~130 | 注册全部 12 条命令（setApiKey / manageApiKeys / setVisionProxyModel / getApiKey / openSettings / generateGitCommitMessage / abortGitCommitMessage / setModelPreset / syncPush / syncPull / checkUsage）+ `onDidChangeConfiguration` 监听（apiMode / enableAutoModelDiscovery 变化时刷新模型列表） |
+| `commands/apiKeyManagerUi.ts` | ~649 | `showApiKeyManager()` QuickPick 管理（增删/批量导入/设为当前（仅 single 模式）/绑定 cookie/重置失效/检测可用性/编辑 key/**账号余额显示**）+ 展示辅助 `formatBalanceDetailText` / `fetchAccountInfo` |
+| `commands/checkUsageCommand.ts` | ~60 | `checkUsageCommand()`：强制刷新套餐用量（绕过 TTL）并弹窗展示三窗口使用率 + 余额；区分未配置 token / 401 失效 / 一般失败三种错误 |
+| `commands/visionProxyCommand.ts` | ~68 | `setVisionProxyModelCommand()`：从 `/v1/models` 动态加载 `supports_vision=true` 模型供 QuickPick 选择，API 不可用时回退手填 |
+| `commands/modelPresetCommand.ts` | ~108 | `setModelPresetCommand()`：命名预设（Precise/Balanced/Creative）与自定义 temperature/top_p 输入 |
+| `core/logger.ts` | ~43 | 日志输出 (LogOutputChannel) |
+| `core/localize.ts` | ~213 | 中英文国际化 |
+| `core/types.ts` | ~94 | `SenseAudioModelItem`, `ModelPreset`, `ModelsResponse`, `RetryConfig` 等类型 |
+| `core/utils.ts` | ~294 | 工具函数 (重试、角色映射、工具转换等) |
+| `core/versionManager.ts` | ~31 | 扩展版本信息 |
+| `ui/statusBar.ts` | ~330 | 状态栏创建、更新、累计计数器；**套餐用量渲染**（主文本 `5H 65%` / 额度耗尽改显余额、悬停提示三窗口+倒计时+余额+计费模式）、后台轮询（`startUsagePolling`/`refreshPlanUsage`）、`refreshPlanUsageNow`（点击状态栏/命令强制刷新）；`showTokenStatusBar()` 受 `senseaudio.enableThirdPartyTokenIndicator`（**默认关闭**）控制 |
+| `cloud/cloudSync.ts` | ~308 | 云同步（GitHub Gist）：`pushToCloud` / `pullFromCloud` / `autoPullOnStartup` |
+| `gitCommit/commitMessageGenerator.ts` | ~441 | Git 提交消息生成逻辑（多 key 轮换循环） |
+| `gitCommit/gitUtils.ts` | ~223 | Git 命令封装 |
+| `tokenizer/tokenizerManager.ts` | ~97 | o200k_base 分词器管理 (含 LRU 缓存) |
+| `tokenizer/provideToken.ts` | ~89 | Token 用量计算 |
+| `tokenizer/imageUtils.ts` | ~113 | 图片尺寸解析 (PNG/GIF/JPEG/WebP) |
+| `vision/types.ts` | ~80 | Vision proxy 类型定义（`StoredImage`, `InterceptedToolCall`, `ASK_IMAGE_TOOL_DEF`, `ASK_IMAGE_TOOL_NAME`, `ASK_WITH_MULTI_IMAGE_TOOL_DEF`, `ASK_WITH_MULTI_IMAGE_TOOL_NAME`, `DEFAULT_VISION_PROMPT`） |
+| `vision/historyCodec.ts` | ~136 | 跨轮视觉历史编解码（源自上游 opencode-go-copilot v1.9.2）：`VISION_TOOL_HISTORY_MIME`、`VisionToolHistoryEntry`、`serializeVisionToolHistory`、`deserializeVisionToolHistory`、`toOpenAIVisionToolMessages`、`toAnthropicVisionToolMessages` |
+| `vision/historyPart.ts` | ~18 | 跨轮视觉历史 DataPart 创建/解析（源自上游）：`createVisionToolHistoryPart`、`parseVisionToolHistoryPart` |
+| `vision/imageProxy.ts` | ~150 | 图片代理核心：调用视觉模型描述图片（`callVisionModel`/`callVisionModelMulti`），**仅在本供应商（senseaudio）内查找视觉模型**（`findVisionModel` 多级回退，修复 issue #3），支持 thinking 模式配置和文本流式转发 |
+| `typings/vscode.proposed.*.d.ts` | — | VS Code proposed API 类型声明（仅编译期类型补全，不影响运行时） |
+| `scripts/build/build-info.mjs` | ~90 | 编译元信息生成：`npm run compile` 后自动运行，写入 `out/build-info.json`（版本号 + 编译时间，标注 IANA 时区与 UTC 偏移）并追加 `.copilot/build-log.md`（编译日志） |
+| `scripts/build/package-vsix.mjs` | ~20 | VSIX 打包脚本（`npm run build`）：从 `package.json` 读取版本号，输出名固定为 `senseaudio-copilot-<version>.vsix`（如 `senseaudio-copilot-1.10.0.vsix`，发布命名规范，不用 vsce 默认的 `extension.vsix`） |
+| `scripts/build/copy-tokenizer.js` | ~55 | postinstall：确保 `assets/model/o200k_base.tiktoken` 存在，缺失时从 OpenAI 公共存储下载 |
+| `scripts/dev/check-new-models.mjs` | ~244 | 检查 API 新模型（对比内置清单） |
+| `scripts/dev/check-settings.mjs` | ~70 | **设置项一致性核对**：扫描 `src/**/*.ts` 中所有 `getConfiguration` 读取（含带前缀 / 无前缀 / 常量键 / **嵌套配置节**四种形式），与 `package.json` 的 `contributes.configuration` 双向 diff，输出「已用未声明」与「已声明未用」。**已挂到 `npm run compile`**（有漂移则编译失败）。用于防止设置项漂移（曾发现 `enableAutoModelDiscovery` 声明了但代码从未读取、`senseaudio.retry.*` 四个设置从未声明） |
+| `scripts/dev/audit-all.mjs` | ~150 | **完整审计**（`npm run audit`）：7 项检查一次跑完——① 设置项漂移 ② 未使用导出 ③ 未使用 l10n 键 ④ `package.nls.json` / `package.nls.zh-cn.json` 键集合一致性 ⑤ 命令声明 vs 注册 ⑥ 文档引用的文件路径是否存在 ⑦ 测试脚本引用的 `out/` 路径是否存在 |
+| `test/api-tests.mjs` | ~282 | 三协议 API 完整测试脚本（OpenAI/Anthropic/Responses，第 9b 项含生产 400 回归用例） |
+| `test/test-plan-usage.mjs` | ~250 | **套餐用量快照测试**（29 项断言）：窗口归一化（各平台 key 命名）、百分比（pending 计入/超额不截断）、超额判定（只看月度窗口）、三态计费模式、倒计时、摘要格式化、**真实 API 夹具回归**（代金券 200 倍换算 bug）；运行前需 `npm run compile` |
+| `test/test-transient-retry.mjs` | ~120 | **瞬态错误分类测试**（13 项断言）：500 命中瞬态重试但**不**命中 key 轮换（平台问题不换 key）、429/503 两者都命中（回归）、400/403 都不命中、401/402 仅轮换、失效原因提取；运行前需 `npm run compile` |
+| `test/test-vision-history.mjs` | ~155 | 跨轮视觉历史编解码 + 双 API 转换器闭环测试（源自上游 opencode-go-copilot v1.9.2，含 DeepSeek 空 reasoning_content 回归用例；运行前需 `npm run compile`） |
+| `test/test-anthropic-tool-result-merge.mjs` | ~168 | Anthropic 连续工具结果合并测试（源自上游，issue #87 场景：3 个并行 tool_use 结果合并为单条 user 消息；运行前需 `npm run compile`） |
+| `test/test-*.mjs`（其余） | — | 令牌应用 / 封号检测 / 封号轮换 / 模型差异 / Responses 复检 / 视觉能力检查等专项测试 |
 
 ---
 
@@ -556,80 +637,229 @@ test/
 ### 4.1 `src/extension.ts`
 
 #### `activate(context: vscode.ExtensionContext): void`
-扩展激活入口。初始化日志、分词器、状态栏；注册 `LanguageModelChatProvider`；注册七条命令（设置 API Key、获取 API Key 网址、打开扩展设置、生成 Git 提交消息、中止生成、设置模型预设、管理 API Keys）。**不弹任何引导界面**——未配置 key 时启动静默，key 管理仅经显式命令进入。
-
-#### `showApiKeyManager(context: vscode.ExtensionContext): Promise<void>`
-多 Key 管理 QuickPick 主流程（`senseaudio.manageApiKeys` 命令）。循环渲染 key 列表（脱敏显示 + 可用性/当前使用/cookie 状态/**两种余额+赠送有效期**标记；sticky 模式下另显示 `$(pinned) 当前固定` 只读标记，指向 `getRotationCursorIndex()` 游标所指 key），支持动作：添加 Key（依次输入 key/cookie/备注）、**批量导入**（`batchImportFlow` 表单式三元组）、删除 Key（二次确认）、**设为当前使用（仅 single 模式渲染，轮询模式隐藏；★ Current 标记同理）**、重置失效状态（清冷却 + available=false → null）、**检测可用性（`showCheckMenu` 二级界面：列出全部 key 状态 + "检测所有"选项）**、绑定或更新 Cookie、清除 Cookie、**编辑 Key（`editKeyFlow` 三字段 value/cookie/label）**。内部局部函数：`batchImportFlow`（逐条输入 key/cookie/备注三元组，Finish 时调用 `addApiKeys`，已存在 key 更新 cookie）、`showCheckMenu`（检测二级界面，单测/全测）、`checkAllAvailabilityFlow`（withProgress 遍历 `testKeyAvailability` 并更新状态）、`bindCookieFlow`、`editKeyFlow`、`checkAvailabilityFlow`、`pickKey`。
-
-**余额显示（2026-08-15 升级为两种余额+赠送有效期）**：主界面 `render()`、检测二级界面 `showCheckMenu()` 与 key 选择界面 `pickKey()`（删除/设当前/编辑/绑定/清除 cookie 共用）均通过 `getBalanceDetailCached(cookie, ttl)`（TTL 缓存）为绑定 cookie 的 key 查询完整余额详情并展示——充值余额 `availableBalanceCny - expiringBalanceCny` 显示 `$(coin)/$(error) 充值 ¥X.XX`（> `minBalanceCny` 为 coin、≤ 为 error 即轮询会被跳过），赠送余额 `expiringBalanceCny` 显示 `$(gift) 赠送 ¥Y.YY`（> 0 时显示，附 `（至 YYYY-MM-DD）` 有效期，`nextExpiryAt` 经 `formatExpiryDate` 本地时区格式化）；查询失败显示 `$(warning) 余额未知`；未绑定 cookie 不显示余额（无法预检）。格式化逻辑集中在 `formatBalanceDetailText`（模块级函数）。**类型守卫（2026-08-14）**：`toFixed(2)` 前金额统一经 `queryBalanceDetail` 的 `toNumber` 强制转 number（API 曾以字符串返回金额导致 toFixed 崩溃）。`checkAvailabilityFlow` 的余额不足提示改用 `getMinBalanceCny()` 显示实际阈值（原硬编码 0）。
-
-**平台 Key 数量展示（2026-08-24）**：主界面 `render()`、检测二级界面 `showCheckMenu()` 与 key 选择界面 `pickKey()`（删除/设当前/编辑/绑定/清除 cookie 共用）均对绑定 cookie 的 key 经 `getApiKeysByCookieCached`（TTL 缓存，按 cookie 去重查询，避免多个 key 共享同一 cookie 时重复请求）查询 `GET /api/api-keys`，展示 `平台 Key：N / 10`（`status==="enabled"` 的 key 数量 / 平台上限 10，停用/删除的 key 不占上限）；查询失败显示 `$(warning) 平台 Key 数量未知`，未绑定 cookie 不显示。格式化逻辑集中在 `formatPlatformKeysText`（模块级函数），查询逻辑集中在 `fetchPlatformKeyListsByCookie`（按 cookie 去重）。
+扩展激活入口。**仅编排**：初始化日志、分词器、状态栏；注册 `LanguageModelChatProvider`；委托 `registerCommands(context, provider)` 注册全部命令；触发启动任务（`syncModelsOnStartup` / `autoPullOnStartup`）。**不弹任何引导界面**——未配置 key 时启动静默，key 管理仅经显式命令进入。
 
 #### `deactivate(): void`
-扩展停用。清理资源（日志 dispose）。
 
 ---
 
-### 4.2 `src/provider.ts`
+### 4.1a `src/commands/registerCommands.ts`
 
-#### `class SenseAudioChatModelProvider implements LanguageModelChatProvider`
-核心 Provider 类。
-
-| 属性 | 类型 | 说明 |
-|------|------|------|
-| `_lastRequestTime` | `number \| null` | 上次请求完成时间，用于延迟计算 |
-
-#### `constructor(secrets: vscode.SecretStorage, statusBarItem: vscode.StatusBarItem)`
-构造函数，接收密钥存储和状态栏条目。
-
-#### `notifyModelListChanged(): void`
-触发 `onDidChangeLanguageModelChatInformation` 事件，通知 VS Code 模型列表可能已变化（如 `senseaudio.apiMode` 切换），VS Code 会重新调用 `provideLanguageModelChatInformation` 刷新选择器。由 `extension.ts` 在 `onDidChangeConfiguration` 中调用。
-
-#### `private _createFetchWithTimeout(requestTimeoutMs: number): typeof fetch`
-创建 undici fetch 实例，设置自定义 `bodyTimeout` 防止流式响应中 TCP 空闲连接被提前关闭。回退到全局 `fetch`。
-
-#### `provideLanguageModelChatInformation(options, _token): Promise<LanguageModelChatInformation[]>`
-获取可用的语言模型列表。参数类型为 `PrepareLanguageModelChatModelOptions`，委托给 `prepareLanguageModelChatInformation()`。
-
-#### `provideTokenCount(_model, text, _token): Promise<number>`
-计算文本或消息的 Token 数量。委托给 `countMessageTokens()`。
-
-#### `provideLanguageModelChatResponse(model, messages, options, progress, token): Promise<void>`
-核心方法：处理聊天请求，流式返回响应。包括模型配置获取（内置模型 → 自动发现回退）、API Key 验证（多 key 轮换循环）、推理力度应用、temperature/top_p 注入（模型预设或自定义设置）、API 模式确定（`senseaudio.apiMode` 设置：`auto` 跟随模型默认或强制 `openai`/`anthropic`/`responses`；`senseaudio.enableResponsesApi` 关闭时 auto 模式下的 responses 模型回退 openai）、延迟控制、超时管理、**多 key 轮换循环**（`pickNextApiKey` → 余额预检 → `_executeApiRequest` → 成功 break / 轮换错误换 key / 其他错误抛出；single 模式 fallback=switch 仅在当前 key 余额不足（402/预检）时切换并设为当前 key，其他错误不切换、走 single 专属报错文案）、流式解析、图片代理拦截处理和错误处理。错误处理区分三种情况：用户取消（直接重新抛出原始错误）、超时（友好超时提示）、连接被终止（友好终止提示）。
-
-#### `private async _executeApiRequest(params): Promise<void>`
-执行单个 key 的完整 API 请求：三协议分发（openai/anthropic/responses，原 provideLanguageModelChatResponse 内的协议分支）、流式处理、`_handleInterceptedToolCall` 图片代理第二轮。在轮换循环内每轮调用一次。参数含 `apiKey`（当前选中的 key 值）、`requestHeaders`、`trackingProgress`、`onUsage`（用量回调）等。错误抛出给轮换循环调用方决定是否换 key。
-
-#### `private async _handleInterceptedToolCall(params): Promise<void>`
-处理图片代理拦截。循环处理最多 `senseaudio.visionMaxRounds` 轮（默认 5）。每轮检测 API 实例的 `interceptedToolCall`，发出 thinking 块显示“正在根据图片提问：[问题]”，关闭 thinking 块后视觉模型输出以普通文本流式显示。单图调用 `callVisionModel()`，多图调用 `callVisionModelMulti()`，**每轮在关闭 thinking 块后输出跨轮视觉历史 DataPart（`createVisionToolHistoryPart`，封装 id/name/args/result/reasoningContent）供 VS Code 带入下一轮对话**，构建本轮 API 请求（追加 assistant tool_call + tool result），注入 VS Code 原生工具 + ask_image（+ ask_with_multi_image 当 >=2 图时）供模型继续使用，保留 temperature/reasoning_effort 等原始参数，DeepSeek 兼容注入 `reasoning_content`。模型不再调用 ask_image/ask_with_multi_image 时退出循环。**视觉代理轮内失败不触发 key 轮换**（主请求已成功、tool 上下文已建立，换 key 会不一致），直接报错由用户重试整个请求。
-
-- 视觉模型调用期间用户取消则跳过本轮。
-- 每轮创建独立 AbortController，带独立超时。
-- 每轮注入 VS Code 原生工具 + ask_image + ask_with_multi_image，确保模型可以混合使用。
-- Anthropic 模式额外恢复 `system` 内容（`_systemContent`）和 `thinking` 参数（启用→`{ type: "enabled", budget_tokens: 8192 }` / adaptive→`{ type: "adaptive" }` / 禁用→`{ type: "disabled" }`，与主请求 `prepareRequestBody` 保持一致）。
-- Responses 模式使用文本化回填（assistant `output_text` + user `input_text`，因端点拒绝 function_call 块）。
-- 第二轮及后续轮次请求体中显式设置 `tool_choice` 为 `"auto"`（OpenAI）或 `{ type: "auto" }`（Anthropic），确保模型可继续调用工具。
-- 使用 `_resetStreamState()` 重置流状态，避免 `_completedToolCallIndices` 等状态在轮次间残留导致工具调用被跳过。
-- `thinking` 字段值统一使用字符串（`"enabled"` / `"disabled"`），与 `prepareRequestBody` 保持一致。
-
-#### `private async ensureApiKey(): Promise<ApiKeyEntry | undefined>`
-静默检查 API Key（经 keyManager.getApiKeyStore），返回 active（或第一个）key 条目。**无任何 key 时静默返回 undefined，不弹输入框**（2026-09-18 移除弹窗引导——未配置 key 时请求直接失败，报错 "SenseAudio API key not found" 由 VS Code 在聊天内联展示；添加 key 走 `senseaudio.manageApiKeys` 命令）。轮换循环在请求前调用。
-
-#### `export const REASON_TEXT: Record<string, string>`
-key 轮换失败原因 → 人类可读标签（l10n key）：`balance`/`invalid`/`rate_limited`/`server_error`/`api_error`/`unavailable`。供"全部 key 不可用"报错展示（`l10n(REASON_TEXT[reason])`）。
-
-#### `export async function buildAllKeysUnavailableDetail(secrets): Promise<string>`
-构建"全部 API Key 均不可用"的脱敏原因详情：遍历 store 中每个 key，用 `getKeyUnavailableReason` 取当前状态原因（冷却中/持久化不可用/余额不足），生成 `sk_****abcd: 服务端繁忙 (503)` 列表（`; ` 连接）。供 provider 与 gitCommit 的兜底报错（`pickNextApiKey` 返回 undefined 时）展示。
-
-#### `export async function tryTransientRetryRound(secrets, retryCount, maxRetries): Promise<boolean>`
-瞬态失败（429/503）整轮自动重试辅助。达到上限返回 false；否则**清空瞬态冷却**（`resetExhaustedKeys(secrets,false)`，不触碰持久化 unavailable——冷却期间 `pickNextApiKey` 会跳过全部 key 使重试无效）、指数退避等待（2s/4s/8s，上限 8s）后返回 true。供 provider 与 gitCommit 的轮换循环在"全部 key 均因 429/503 失败"时调用，次数由 `senseaudio.transientRetryTimes` 配置（默认 3，0 禁用）。
-
-#### `checkZeroAnswerBudgetExhausted(api, collectedOutputText, modelId): void`（模块级函数）
-零正文预算耗尽检测（2026-09-03 新增）：流式处理结束后，若结束原因为 `length`/`max_tokens` 且累计正文为空（`collectedOutputText` 拼接后为空或全空白），抛出友好错误（l10n 中文文案"模型将全部输出 token 预算耗在了思考上……请降低推理强度或关闭思考后重试"）并记录 `request.zeroAnswer` 错误日志——避免思考模型把 max_tokens 预算全部耗在推理后静默返回空流，Copilot Chat 只显示 "Sorry, no response was returned." 无任何提示。由 `_executeApiRequest` 在三个协议分支（openai/anthropic/responses）的 `processStreamingResponse` 之后调用。
+#### `registerCommands(context, provider): void`
+注册扩展的全部命令与配置变更监听，所有 disposable 推入 `context.subscriptions`。含 `onDidChangeConfiguration` 监听（`senseaudio.apiMode` / `senseaudio.enableAutoModelDiscovery` 变化时调用 `provider.notifyModelListChanged()`）与 11 条命令：`setApiKey`（旧版单 key 流程，写入多 key store）、`manageApiKeys`（委托 `showApiKeyManager`）、`setVisionProxyModel`（委托 `setVisionProxyModelCommand`）、`getApiKey`（打开官网）、`openSettings`、`generateGitCommitMessage` / `abortGitCommitMessage`、`setModelPreset`（委托 `setModelPresetCommand`）、`syncPush` / `syncPull`（委托 `pushToCloud` / `pullFromCloud`）。
 
 ---
 
-### 4.3 `src/models.ts`
+### 4.1b `src/commands/apiKeyManagerUi.ts`
+
+#### `showApiKeyManager(context: vscode.ExtensionContext): Promise<void>`
+多 Key 管理 QuickPick 主流程（`senseaudio.manageApiKeys` 命令）。循环渲染 key 列表（脱敏显示 + 可用性/当前使用/cookie 状态/**账号余额**标记；sticky 模式下另显示 `$(pinned) 当前固定` 只读标记，指向 `getRotationCursorIndex()` 游标所指 key），支持动作：添加 Key（依次输入 key/cookie/备注）、**批量导入**（`batchImportFlow` 表单式三元组）、删除 Key（二次确认）、**设为当前使用（仅 single 模式渲染，轮询模式隐藏；★ Current 标记同理）**、重置失效状态（清冷却 + available=false → null）、**检测可用性（`showCheckMenu` 二级界面：列出全部 key 状态 + "检测所有"选项）**、绑定或更新 Cookie、清除 Cookie、**编辑 Key（`editKeyFlow` 三字段 value/cookie/label）**。内部局部函数：`batchImportFlow`（逐条输入 key/cookie/备注三元组，Finish 时调用 `addApiKeys`，已存在 key 更新 cookie）、`showCheckMenu`（检测二级界面，单测/全测）、`checkAllAvailabilityFlow`（withProgress 遍历 `testKeyAvailability` 并更新状态）、`bindCookieFlow`、`editKeyFlow`、`checkAvailabilityFlow`、`pickKey`。
+
+**账号余额显示**：主界面 `render()`、检测二级界面 `showCheckMenu()` 与 key 选择界面 `pickKey()`（删除/设当前/编辑/绑定/清除 cookie 共用）均通过 `fetchAccountInfo(getLoginToken)`（TTL 缓存）查询账号余额并展示——现金余额显示 `$(coin)/$(error) 充值 ¥X.XX`（> `minBalanceCny` 为 coin、≤ 为 error），代金券可用显示 `$(gift) 赠送 ¥Y.YY`（> 0 时显示，附 `（至 YYYY-MM-DD）` 最早到期日，经 `formatExpiryDate` 本地时区格式化）；查询失败显示 `$(warning) 余额未知`。**余额按账号粒度**（所有 key 共享同一份，不再按 cookie 逐 key 查询）。格式化逻辑集中在 `formatBalanceDetailText`（模块级函数）。**类型守卫**：`toFixed(2)` 前金额统一经 `toNumber` 强制转 number（API 曾以字符串返回金额导致 toFixed 崩溃）。`checkAvailabilityFlow` 的余额不足提示用 `getMinBalanceCny()` 显示实际阈值。
+
+#### `formatBalanceDetailText(info, minBalance): string`
+格式化账号余额为显示文本：现金余额（充值）+ 代金券可用（赠送，含最早到期日）。现金余额 ≤ `minBalanceCny` 时以 `$(error)` 图标标记。
+
+#### `fetchAccountInfo(getLoginToken): Promise<AccountInfo | undefined>`
+查询账号余额（TTL 缓存）。数据源为登录 PASETO token 查 `platform.senseaudio.cn/api/user/self`（`getAccountInfoCached`）。余额按**账号**粒度，所有 key 共享同一份。无 token 或查询失败 → undefined（UI 显示"余额未知"）。
+
+---
+
+### 4.1c `src/commands/visionProxyCommand.ts`
+
+#### `setVisionProxyModelCommand(context): Promise<void>`
+视觉代理模型选择命令（`senseaudio.setVisionProxyModel`）。从 `/v1/models` 动态加载 `supports_vision=true` 的模型列表供 QuickPick 选择，API 不可用时回退到手动输入。
+
+---
+
+### 4.1d `src/commands/modelPresetCommand.ts`
+
+#### `setModelPresetCommand(): Promise<void>`
+模型温度预设选择命令（`senseaudio.setModelPreset`）。提供命名预设（Precise/Balanced/Creative 等）与自定义输入（单个数字 = temperature，两个逗号分隔数字 = temperature + top_p）。
+
+---
+
+### 4.1e `src/provider/requestOptions.ts`
+
+#### `applyReasoningEffort(um, options): void`
+应用推理强度（thinking 模式）到模型配置。`"disabled"` → 关闭思考（`thinkingMode="always"` 的模型除外）；`"enabled"` → 开启思考使用默认力度；`"adaptive"`/`"high"`/`"max"` 等 → 开启思考并指定力度。
+
+#### `applyTemperature(um, config): void`
+注入 temperature / top_p（模型预设或自定义设置）。模型声明 `supportsTemperature === false` 时清空两者；模型声明 `fixedTopP`（如 kimi-k2.6 仅接受 0.95）时覆盖用户/预设配置。
+
+#### `resolveApiMode(modelId, config): "openai" | "anthropic" | "responses"`
+确定本次请求使用的 API 协议。`senseaudio.apiMode` 用户设置优先（强制）；`auto` 时按能力动态探测（启动时从 `/v1/models` 缓存，不硬编码模型 ID）：`enableResponsesApi` + supports_responses → responses；`enableAnthropicApi` + supports_anthropic → anthropic；否则 openai。
+
+---
+
+### 4.1f `src/provider/rotation.ts`
+
+#### `runKeyRotationLoop(params): Promise<void>`
+多 API Key 轮换循环。每轮选一个 key，跳过余额不足（cookie 主动预检）或返回轮换错误（401/402/429/503，状态码与文本 patterns 可配置）的 key。全部 key 用尽时列出脱敏 key + 失败原因；若失败均为瞬态（429/503）则按 `senseaudio.transientRetryTimes` 指数退避重试整轮。single 模式 fallback=switch 时仅在余额不足（402/预检）时切换并经 `setActiveKeyByValue` 设为当前（`onFallbackSwitch` 回调触发通知）。参数：`secrets` / `token` / `abortController` / `execute(apiKey, requestHeaders)` / `customHeaders` / `apiMode` / `onFallbackSwitch`。
+
+---
+
+### 4.1g `src/provider/apiDispatch.ts`
+
+#### `executeApiRequest(params): Promise<void>`
+单次 API 请求执行：协议分发（openai / anthropic / responses）、请求体构建、`executeWithRetry`、流式处理、零正文预算耗尽检测（`checkZeroAnswerBudgetExhausted`）、以及 ask_image 视觉代理的后续轮次（`handleInterceptedToolCall`）。轮换循环内每个 key 调用一次；错误直接抛出，由调用方决定是否换 key。
+
+---
+
+### 4.1h `src/provider/visionRounds.ts`
+
+#### `handleInterceptedToolCall(params): Promise<void>`
+图片代理（ask_image）多轮处理。非视觉模型收到图片时 `convertMessages` 把图片替换为文本引用并存入实例的 `localImages`；模型调用 `ask_image` / `ask_with_multi_image` 被 `CommonApi` 拦截到 `interceptedToolCall`。本函数：① 用模型的具体提问调用视觉模型（流式转发到 thinking 块）；② 输出跨轮视觉历史 DataPart（VS Code 自动带入下一轮对话）；③ 构建 assistant tool_call + tool result 消息并再次请求；④ 若模型再次调用 ask_image 则继续下一轮（最多 `senseaudio.visionMaxRounds` 次）。**视觉代理轮内失败不触发 key 轮换**（主请求已成功、tool 上下文已建立，换 key 会不一致），直接报错由用户重试整个请求。
+
+#### `runAnthropicRound(params, api, currentMessages, intercepted, description, hasLocalImages, roundAbortController): Promise<void>`（模块级私有）
+Anthropic 格式轮次：`tool_use` + `tool_result` content block；恢复 `system` 与 `thinking` 配置（启用→`{ type: "enabled", budget_tokens: 8192 }` / adaptive→`{ type: "adaptive" }` / 禁用→`{ type: "disabled" }`）；工具用 Anthropic 格式（`name`/`description`/`input_schema`）。
+
+#### `runResponsesRound(...): Promise<void>`（模块级私有）
+Responses 格式轮次：文本化回填（assistant `output_text` `[tool_call] name(args) [/tool_call]` + user `input_text` `[tool_result] ... [/tool_result]`，因端点拒绝 function_call 块）；工具用扁平格式 `{ type: "function", name, description, parameters }`。
+
+#### `runOpenAIRound(...): Promise<void>`（模块级私有）
+OpenAI 格式轮次：assistant `tool_calls` + `tool` role 消息；DeepSeek 兼容注入 `reasoning_content`（取自 `api.capturedReasoningContent`，用后清空）。
+
+---
+
+### 4.1i `src/provider/errors.ts`
+
+#### `REASON_TEXT: Record<string, string>`
+key 轮换失败原因 → 人类可读标签（l10n key）：`balance`/`invalid`/`rate_limited`/`server_error`/`api_error`/`unavailable`/`banned`。
+
+#### `checkZeroAnswerBudgetExhausted(api, collectedOutputText, modelId): void`
+零正文预算耗尽检测：流式处理结束后，若结束原因为 `length`/`max_tokens` 且累计正文为空，抛出友好错误并记录 `request.zeroAnswer` 日志——避免思考模型把 max_tokens 预算全部耗在推理后静默返回空流。
+
+#### `buildAllKeysUnavailableDetail(secrets): Promise<string>`
+构建"全部 API Key 均不可用"的脱敏原因详情：遍历 store 中每个 key，用 `getKeyUnavailableReason` 取当前状态原因，生成 `sk_****abcd: 服务端繁忙 (503)` 列表（`; ` 连接）。
+
+#### `tryTransientRetryRound(secrets, retryCount, maxRetries): Promise<boolean>`
+瞬态失败（429/500/503）整轮自动重试辅助。达到上限返回 false；否则**清空瞬态冷却**（`resetExhaustedKeys(secrets, false)`，不触碰持久化 unavailable——冷却期间 `pickNextApiKey` 会跳过全部 key 使重试无效）、指数退避等待（2s/4s/8s，上限 8s）后返回 true。两种调用场景：① 全部 key 均因瞬态错误失败（429/503）→ 清冷却后重试整轮让 key 重新可选；② 平台侧错误但 key 无问题（如 500）→ 不标记 key，仅退避后重试同一个 key。
+
+#### `reportNativeUsage(usage, progress): void`
+向 Copilot Chat 原生 Token 指示器报告用量：发送 MIME 类型为 `usage` 的 `LanguageModelDataPart`（TextEncoder 编码 JSON，含 `prompt_tokens` / `completion_tokens` / `total_tokens` / `prompt_tokens_details.cached_tokens`）。始终启用。
+
+#### `getRequestedReasoningEffort(options): string | undefined`
+从 VS Code 请求选项中解析用户选择的推理强度。依次检查 `modelConfiguration.reasoningEffort`、`modelOptions.thinking.type`、`modelOptions.reasoning_effort` / `reasoningEffort`。
+
+---
+
+### 4.1j `src/api/sse.ts`
+
+#### `interface SseEvent`
+`{ parsed?: unknown; raw: string; done: boolean }` — 单条 SSE 事件（`done === true` 表示 `[DONE]` 哨兵）。
+
+#### `interface SseStreamOptions`
+`{ tag: string; modelId: string; token?: CancellationToken; signal?: AbortSignal; debugChunks?: boolean }` — 流解析选项（`tag` 用于日志前缀，如 `"openai"` → `openai.stream.chunk.error`）。
+
+#### `iterateSseEvents(responseBody, options): AsyncGenerator<SseEvent>`
+逐条产出 SSE 事件。负责 reader 生命周期、`data:` 前缀解析、`[DONE]` 哨兵、取消回调注册（`token.onCancellationRequested` / `signal` abort）与 finally 清理。解析失败的 chunk 记录日志并跳过（不中断流）。
+
+#### `consumeSseStream(responseBody, options): Promise<void>`
+回调式消费 SSE 流（`onEvent` / `onDone` / `onFinally`），统一处理开始/结束/错误日志与 finally 清理。三协议 `processStreamingResponse` 共用。
+
+---
+
+### 4.1k `src/keys/` 模块
+
+> `keys/keyManager.ts` 为 barrel，统一导出以下模块的全部 API（保持既有 `../keys/keyManager` 导入路径不变）。
+
+#### `keys/types.ts`
+`ApiKeyEntry` / `ApiKeyStore` / `ApiKeyMode` / `SingleKeyFallback` / `KeyDisplayStatus` 类型定义。
+
+#### `keys/config.ts`
+`getApiKeyMode` / `getRotationCursorIndex` / `getSingleKeyFallback` / `getRotationStatusCodes` / `getRotationErrorPatterns` / `getTransientRetryStatusCodes`（默认 `[429, 500, 503]`）/ `getExhaustedCooldownMin` / `getTransientRetryTimes`。
+
+#### `keys/state.ts`
+模块级可变状态（独立成文件避免循环依赖）：`STORE_KEY` / `LEGACY_KEY` 常量、`getStoreCache`/`setStoreCache`、`getRotationIndex`/`setRotationIndex`、`getTransientExhaustedMap`。
+
+#### `keys/store.ts`
+`getApiKeyStore`（含旧版单 key 迁移与 JSON 损坏修复）/ `saveApiKeyStore` / `invalidateApiKeyStoreCache` / `addApiKey` / `addApiKeys` / `removeApiKey` / `setActiveKey` / `setKeyCookie` / `updateApiKey`。
+
+#### `keys/selection.ts`
+`getPrimaryApiKey` / `pickNextApiKey`（rotation 前移游标 / sticky 钉住游标）/ `shouldSingleKeyFallbackSwitch` / `setActiveKeyByValue`。
+
+#### `keys/health.ts`
+`getTransientExhaustedInfo` / `isApiKeyEligible` / `hasTransientExhaustedKey` / `isKeyRotationError` / `isTransientRetryError` / `isTransientExhaustedReason` / `getKeyRotationReason` / `getKeyUnavailableReason` / `markApiKeyExhausted` / `markApiKeyAvailable` / `updateKeyAvailability` / `resetExhaustedKeys` / `getKeyDisplayStatus`。
+
+#### `keys/mask.ts`
+`maskApiKey` / `maskCookie` 脱敏。
+
+---
+
+### 4.1l `src/balance/` 模块
+
+> `balance/balanceCheck.ts` 为 barrel，统一导出以下模块的全部 API。
+
+#### `balance/config.ts`
+`getMinBalanceCny`（余额阈值，仅用于 UI 标记充值余额不足）/ `getBalanceCheckIntervalSec`（账号信息缓存 TTL）/ `toNumber`（金额字符串转 number 防御）。
+
+#### `balance/accountInfo.ts`
+`queryAccountInfo(loginToken)`（`GET platform.senseaudio.cn/api/user/self`，Bearer PASETO token + `x-platform`/`x-product` 必需头）/ `getAccountInfoWithStatus(loginToken, ttlSec, force?)`（带状态返回：`ok`/`unauthorized`/`error`，供状态栏与命令区分 401）/ `getAccountInfoCached(loginToken, ttlSec)`（TTL 缓存，失败返回 undefined）/ `formatExpiryDate(epochSec)`（代金券到期日 → `YYYY-MM-DD` 本地时区）+ `POINTS_PER_CNY`（**1 元 = 1,000,000 积分**，2026-09-27 实测校正）+ `AccountInfo` / `PlanUsageWindow` / `AccountInfoFetchStatus` 类型。
+
+#### `balance/planUsage.ts`
+**套餐用量快照模块**（对标上游 opencode-go-copilot 的 `goUsage.ts`）。核心是**严格区分两套计费规则**：周期额度（5h/周）是限流窗口，耗尽后等下一周期恢复、不消耗余额；套餐积分（月度 `credit_30d_limit`）才是订阅额度，耗尽后走超额策略。
+
+- `buildSnapshot(info, now?)`（纯函数）：归一化为 `PlanUsageSnapshot`，含 `quotaWindow`（月度额度窗口）/ `rateLimitWindows`（5h+周）/ `balance` / `extraUsageEnabled` / 三态 `billingMode`（`plan`/`extra`/`free`）
+- `getPlanUsageCached(loginToken, force?)`：TTL 缓存 + **失败保留旧快照**（静默降级）
+- `getPlanUsageSnapshot()`：同步读缓存（状态栏渲染用，不触发网络）
+- `getPlanUsageFetchStatus()` / `resetPlanUsageCache()`
+- `classifyWindow(key, desc)`：宽容匹配各平台 key 命名（`5h`/`rolling`/`5小时`、`7d`/`week`/`周`、`30d`/`month`/`月`），无法识别回退 `other`
+- `getWindowLabel(window)`：`5H` / `Week` / `Month` / 原始 desc
+- `getWindowPercent(window)`：0-100+，`pendingCount` 计入已用，**不夹取上限**（超额如实显示 150%）
+- `isWindowExhausted(window)` / `isPlanExhausted(snapshot)`（**只看月度额度窗口**）/ `getBillingMode(snapshot)`
+- `getPrimaryWindow(snapshot)`：优先 5h 窗口（状态栏主文本用）
+- `formatResetDuration(epochSec, now?)`：`2H13M` / `45M`，过期返回空串
+- `formatUsageSummary` / `formatWindowLine`（`5H——65% (6,500 / 10,000 积分)`）/ `formatBillingModeLine`（三态说明）/ `formatBalanceSummary`
+
+> 设计与移植指南见 `docs/plan-usage-design.md`。
+
+#### `balance/availability.ts`
+`testKeyAvailability(entry, baseUrl?)`：最小真实聊天请求（`say ok` + `max_tokens=8`）——200→可用 / 402→余额不足 / 401→无效 / 其他→无法确定。
+
+> **已删除（2026-09-27）**：旧平台 cookie 端点模块 `legacyCookieApi.ts`（`/api/usage-summary`、`/api/api-keys` 均已 404）及其派生的 `checkKeyBalance` / `isKeyBalanceSufficient` 主动余额预检、`BalanceDetail` / `ApiKeyListItem` 类型、平台 Key 数量展示。余额不足改由 API 返回 402 触发被动轮换。
+
+---
+
+### 4.1m `src/commands/checkUsageCommand.ts`
+
+#### `checkUsageCommand(context): Promise<void>`
+套餐用量查询命令（`senseaudio.checkUsage`）。强制刷新（`refreshPlanUsageNow()` 绕过 TTL）并弹窗展示三窗口使用率 + 余额。错误区分：未配置 token（提示并跳转 `manageApiKeys`）/ 401 token 失效（提示重新复制）/ 一般失败（提示查看输出通道）。同时绑定到状态栏条目点击。
+
+---
+
+### 4.1n `src/cloud/cloudSync.ts`
+
+#### `getGitHubSession(createIfNone: boolean): Promise<vscode.AuthenticationSession | undefined>`（模块级私有）
+获取 VS Code 内置 GitHub 登录会话（`vscode.authentication.getSession("github", ["gist"])`）。`createIfNone=true` 时未登录弹出登录界面；false 时静默返回 undefined。认证失败记日志返回 undefined。
+
+#### `gistFetch(session, url, init?): Promise<Response>`（模块级私有）
+带 GitHub 认证的 fetch（Bearer token + `X-GitHub-Api-Version: 2022-11-28`），非 2xx 抛出含状态码与响应体的错误。
+
+#### `findSyncGist(session): Promise<GistSummary | undefined>`（模块级私有）
+按 description 标记（`senseaudio-copilot key sync (do not edit manually)`）+ 文件名（`senseaudio-keys.json`）在用户 Gist 列表中查找同步 Gist（前 3 页，每页 100）。
+
+#### `fetchSyncPayload(session, gistId): Promise<SyncPayload | undefined>`（模块级私有）
+读取 Gist 文件内容并解析为负载（`{ version: 1, updatedAt, keys }`）；缺失/损坏返回 undefined。
+
+#### `normalizeEntries(keys): SyncedKeyEntry[]`（模块级私有）
+规范化同步条目：过滤空 value，cookie/label 去空白。
+
+#### `buildPayload(keys): SyncPayload`（模块级私有）
+将本地 store 序列化为同步负载（仅 value/cookie/label，可用性状态不同步）。
+
+#### `pushToCloud(context): Promise<void>`
+推送本地 key/cookie/备注 到云端 Gist（`senseaudio.syncPush` 命令）。未登录时弹登录界面；无 key 时警告返回。Gist 定位：缓存 gist id（PATCH 404 回退）→ 按描述查找 → 创建新 Gist（`public: false`）。成功后更新 `globalState` 的 `senseaudio.lastCloudSyncAt` 并弹窗提示。
+
+#### `pullFromCloud(context, silent = false): Promise<boolean>`
+从云端 Gist 拉取 key/cookie/备注 覆盖本地（`senseaudio.syncPull` 命令）。合并策略：云端为源——按 key 值对齐，云端条目覆盖本地 cookie/label，云端有本地无的追加、本地有云端无的删除；可用性状态（available/lastCheckedAt）为本地数据按 key 值保留；activeIndex 按 key 值跟随。无变更时不写 store 仅更新同步时间戳。`silent=true`（启动自动拉取）时：未登录/无 Gist/云端无更新（`updatedAt <= lastSyncAt`）均静默返回 false，拉取成功弹窗提示。
+
+#### `autoPullOnStartup(context): void`
+启动自动拉取入口（fire-and-forget，不阻塞激活）。读取 `senseaudio.cloudSyncAutoPull` 配置（默认开启），关闭则直接返回；未登录 GitHub 时静默跳过不弹登录界面。
+
+---
+
+### 4.2 `src/models/models.ts`
 
 #### `interface BuiltInModelDef`
 内置模型定义接口。
@@ -660,7 +890,7 @@ key 轮换失败原因 → 人类可读标签（l10n key）：`balance`/`invalid
 返回内置模型定义总数（BUILT_IN_MODELS.length）。
 
 #### `getBuiltInModelIds(): Set<string>`
-返回所有内置模型的 baseId 集合。供 `src/modelSync.ts` 在启动同步时对比 API 模型列表，检测不在内置列表中的新模型。
+返回所有内置模型的 baseId 集合。供 `src/models/modelSync.ts` 在启动同步时对比 API 模型列表，检测不在内置列表中的新模型。
 
 #### `getMaxInputTokensRatio(): number`
 读取可配置的 `maxInputTokens` 声明比例（设置 `senseaudio.maxInputTokensRatio`，默认 `1.0`，建议 `0.8`），并夹取到合法范围 [0.1, 1.0]。设置缺失或非法时回退到默认值。`maxInputTokens` 按真实上下文窗口 × 该比例声明（`Math.floor` 取整），使 VS Code 的 agent 自动压缩（约 90% 阈值）能在真实上下文的约 72%（比例 0.8 时）处触发；`context_length` / `max_completion_tokens` 保持真实值用于 API 请求体。
@@ -670,7 +900,7 @@ key 轮换失败原因 → 人类可读标签（l10n key）：`balance`/`invalid
 
 ---
 
-### 4.4 `src/types.ts`
+### 4.3 `src/core/types.ts`
 
 #### `interface SenseAudioModelItem`
 完整模型配置接口。
@@ -720,7 +950,7 @@ key 轮换失败原因 → 人类可读标签（l10n key）：`balance`/`invalid
 
 ---
 
-### 4.5 `src/commonApi.ts`
+### 4.4 `src/api/commonApi.ts`
 
 #### `interface StreamUsage`
 `{ promptTokens, completionTokens, cacheHitTokens?, cacheMissTokens? }` — 流式用量信息。
@@ -786,7 +1016,7 @@ API 实现的抽象基类。
 立即将缓冲的推理内容刷新到进度报告器。
 
 #### `protected processXmlThinkBlocks(content, progress): { emittedAny: boolean }`
-解析 XML think 块 (`꽁...꽁`)，将推理内容与文本内容分离。
+解析 XML think 块 (`...`)，将推理内容与文本内容分离。
 
 #### `protected processTextContent(content, progress): { emittedAny: boolean }`
 处理普通文本内容，发射到进度报告器。
@@ -796,182 +1026,7 @@ API 实现的抽象基类。
 
 ---
 
-### 4.6 `src/keyManager.ts`
-
-#### `interface ApiKeyEntry`
-`{ value: string; label?: string; cookie?: string; available?: boolean | null; lastCheckedAt?: number }` — 单个 API Key 条目。`cookie` 为可选的 `tr_session` cookie（一个 cookie 可绑定多个 key，余额按 cookie 粒度查询）；`available` 为可用性状态（true=可用 / false=不可用 / null=未检测，持久化于 SecretStorage）。
-
-#### `interface ApiKeyStore`
-`{ keys: ApiKeyEntry[]; activeIndex: number }` — 完整 store（`senseaudio.apiKeys` 的 JSON 结构）。
-
-#### `type ApiKeyMode = "rotation" | "single" | "sticky"`
-key 使用模式：轮询 / 单 key / 粘性（固定使用一个 key，失效才切换）。
-
-#### `type SingleKeyFallback = "error" | "switch"`
-single 模式当前 key 失败时的行为：`error`（任何错误直接报错不切换）/ `switch`（**仅在余额不足**——402 轮换错误或余额预检不足——时自动切换到下一个可用 key 并设为当前使用；401 无效 Key 属配置问题应报错、429/503 瞬态错误由瞬态整轮重试兜底，均不切换）。
-
-#### `getApiKeyMode(): ApiKeyMode`
-读取 `senseaudio.apiKeyMode`（默认 `sticky`；非法值回退 sticky）。
-
-#### `getRotationCursorIndex(): number`
-读取当前轮询/粘性游标下标（模块级 `rotationIndex`）。供管理界面标记 sticky 模式下当前固定的 key（`$(pinned) 当前固定`）。
-
-#### `getSingleKeyFallback(): SingleKeyFallback`
-读取 `senseaudio.singleKeyFallback`（默认 `switch`；非法值回退 `switch`）。
-
-#### `getRotationStatusCodes(): number[]`
-读取触发轮换的状态码列表（默认 `[401, 402, 429, 503]`）。
-
-#### `getRotationErrorPatterns(): string[]`
-读取触发轮换的错误文本 patterns（默认含"余额不足"/`INSUFFICIENT_BALANCE`/`RATE_LIMITED` 等）。
-
-#### `getTransientRetryStatusCodes(): number[]`
-读取触发"瞬态整轮自动重试"的状态码列表（`senseaudio.transientRetryStatusCodes`，默认 [429, 503]——限流/服务端繁忙）。与触发轮换的状态码（`apiKeyRotationStatusCodes`）解耦，可分别配置。
-
-#### `getExhaustedCooldownMin(): number`
-读取 429 瞬态冷却时长（分钟，默认 10）。
-
-#### `getTransientRetryTimes(): number`
-读取瞬态失败整轮自动重试次数（`senseaudio.transientRetryTimes`，默认 3，夹取 0-10；0 = 禁用自动重试）。平台繁忙/限流导致全部 key 暂时不可用时自动重试整轮，避免立刻报错。
-
-#### `getApiKeyStore(secrets): Promise<ApiKeyStore>`
-读取并缓存 store；自动迁移旧版单 key（`senseaudio.apiKey`）为单元素列表；JSON 损坏时回退修复。
-
-#### `saveApiKeyStore(secrets, store): Promise<void>`
-写新格式到 SecretStorage；成功后删除旧版单 key（幂等）。
-
-#### `invalidateApiKeyStoreCache(): void`
-使内存缓存失效。
-
-#### `maskApiKey(key): string`
-脱敏 API Key：`sk_****abcd`。
-
-#### `maskCookie(cookie): string`
-脱敏 cookie：`sess_****abcd`。
-
-#### `getTransientExhaustedInfo(keyValue): { reason; remainingSec } | undefined`
-查询是否处于 429 瞬态冷却中；冷却到期自动清除。
-
-#### `isApiKeyEligible(entry): boolean`
-判断 entry 是否可被选中（非持久化不可用、非冷却中）。
-
-#### `hasTransientExhaustedKey(secrets): Promise<boolean>`
-是否存在处于瞬态冷却中的 key（429 限流 / 503 服务端繁忙）。供"全部 key 不可选"时判断是否值得自动重试整轮（平台繁忙通常很快恢复）。
-
-#### `isKeyRotationError(err): boolean`
-判定错误是否应触发 key 轮换：状态码 `[code]`/`status code` 匹配配置列表，或错误文本包含任一 patterns（不区分大小写）。
-
-#### `isTransientRetryError(err): boolean`
-判定错误是否为"瞬态类"（平台繁忙/限流，可能很快恢复 → 值得整轮自动重试）：状态码匹配 `transientRetryStatusCodes`（默认 [429, 503]）。与 `isKeyRotationError` 解耦——触发轮换与触发自动重试的状态码可分别配置。
-
-#### `isTransientExhaustedReason(reason): boolean`
-判断失效原因是否为瞬态类（`rate_limited`/`server_error`）。
-
-#### `getKeyRotationReason(err): string`
-从轮换错误中提取失效原因（基于状态码+文本，比 patterns 精确）：402/`INSUFFICIENT_BALANCE`/"余额不足" → `balance`；401 → `invalid`；429/`RATE_LIMITED` → `rate_limited`；503 → `server_error`；其他 → `api_error`。
-
-#### `getKeyUnavailableReason(entry): string`
-获取 key 当前不可用的机器可读原因（供"全部 key 不可用"报错展示）：瞬态冷却中（429/503）→ `rate_limited`/`server_error`；持久化不可用（`available=false`）→ `unavailable`；其他（未检测/余额不足）→ `balance`。
-
-#### `getPrimaryApiKey(secrets): Promise<ApiKeyEntry | undefined>`
-获取主 key（模型列表/启动同步等"任意有效 key 即可"场景）：single→active；sticky/rotation→从游标环形扫描第一个可用 key（sticky 下游标指向当前钉住的 key，优先命中）。
-
-#### `pickNextApiKey(secrets, mode): Promise<ApiKeyEntry | undefined>`
-选择下一个要使用的 key：rotation 从游标环形扫描第一个可用 key 并前移游标（每次请求都换 key）；sticky 从游标环形扫描第一个可用 key 并钉住游标不前移（固定使用该 key，仅当它失效变 ineligible 后下次才切到下一个并钉住；原 key 恢复后不自动切回，保持前缀缓存亲和性）；single 返回 active key（不可用返回 undefined，由调用方按 fallback 处理，判定见 `shouldSingleKeyFallbackSwitch`）。
-
-#### `shouldSingleKeyFallbackSwitch(secrets, currentRequestFailures): Promise<boolean>`
-single 模式（fallback=switch）下是否应因当前 key 不可用而自动切换。仅当**本轮请求**中当前 active key 因“余额不足”失败（`failedKeys` 记录 reason === `"balance"`，来源 402 轮换错误或余额预检不足）时返回 true——balance 是确定性失败，换 key 即可继续；invalid（401）属配置问题应报错、rate_limited/server_error（429/503）属瞬态错误（换 key 规避不了，由瞬态整轮重试兜底），均不切换。本轮 `failedKeys` 无记录（请求开始时 active key 已因历史请求不可用/冷却）时不切换：上次 402 切换成功时 activeIndex 已随 `setActiveKeyByValue` 移到新 key 不会再走到这里，剩余场景（error 模式遗留、上次切换失败）直接报错更符合 single 语义。供 provider 与 gitCommit 的轮换循环在 `pickNextApiKey` 返回 undefined 时调用。
-
-#### `setActiveKeyByValue(secrets, keyValue): Promise<void>`
-按 key 值把指定 key 设为 single 模式的当前 key（activeIndex 跟随移动；找不到或已是当前 key 时无操作）。供 single 模式 402 自动切换后调用——后续请求直接使用新 key，避免每次请求都重复“fallback 选择 + 弹窗通知”。
-
-#### `markApiKeyExhausted(secrets, keyValue, reason): Promise<void>`
-标记 key 不可用。**瞬态原因**（`rate_limited`/`server_error`）→ 仅记录内存冷却（不持久化，冷却到期自动恢复）；**确定性原因**（`balance`/`invalid`/`api_error`）→ 持久化 `available=false`。
-
-#### `markApiKeyAvailable(secrets, keyValue): Promise<void>`
-标记 key 可用（自愈/手动检测通过），清瞬态冷却。
-
-#### `updateKeyAvailability(secrets, keyValue, available): Promise<void>`
-通用可用性更新。
-
-#### `resetExhaustedKeys(secrets, resetPersisted): Promise<void>`
-清空瞬态冷却；可选将所有持久化不可用标记重置为 null。
-
-#### `addApiKey(secrets, entry): Promise<boolean>`
-添加 key（校验重复值）；返回是否添加成功。
-
-#### `addApiKeys(secrets, entries): Promise<{ added: number; updated: number }>`
-批量添加多个 API Key（三元组 `{ value, cookie?, label? }`）。**已有重复 key 不跳过**，转为更新其 cookie（补全缺失的 cookie，且新 cookie 覆盖旧的）；返回新增数量与更新数量。供 `showApiKeyManager` 的批量导入流程使用。
-
-#### `updateApiKey(secrets, index, fields): Promise<{ ok: boolean; conflict?: boolean }>`
-编辑指定 key 的三个字段（key 值 / cookie / 备注）。修改 key 值时校验不与其它已存在 key 冲突（`conflict: true`）；仅更新调用方提供的字段（undefined 表示不修改）。
-
-#### `removeApiKey(secrets, index): Promise<void>`
-删除 key；自动修正 activeIndex 与轮询游标。
-
-#### `setActiveKey(secrets, index): Promise<void>`
-设置 single 模式的当前 key。
-
-#### `setKeyCookie(secrets, index, cookie?): Promise<void>`
-绑定/更新/清除指定 key 的 cookie。
-
-#### `getKeyDisplayStatus(entry): "available" | "unavailable" | "unknown" | "cooldown"`
-获取 key 的展示状态（供 QuickPick UI）。
-
----
-
-### 4.7 `src/balanceCheck.ts`
-
-> ⚠️ **平台已改版（2026-09-23 实测）**：旧端点 `senseaudio.cn/api/usage-summary` 与 `/api/api-keys` **均已 404**（2026-08-24 实测还是 200）。用户中心已迁移为三域认证体系（`platform.senseaudio.cn/api/*` 用 Bearer PASETO token，插件只有 tr_session cookie 拿不到 token），套餐用量数据源变更为 `platform.senseaudio.cn/api/user/self` 的 `usage_infos`/`account_info` 字段。本模块查询会稳定失败并静默降级（返回 undefined，不阻塞请求，回退被动检测——余额不足时 API 返回 402 触发轮换）。详见 `.copilot/api-reference.md` 第 7 节。
-
-#### `getBalanceCheckEnabled(): boolean`
-读取 `senseaudio.balanceCheckEnabled`（默认 true）。
-
-#### `getMinBalanceCny(): number`
-读取 `senseaudio.minBalanceCny`（默认 0，夹取 ≥ 0）。
-
-#### `getBalanceCheckIntervalSec(): number`
-读取余额查询缓存 TTL（秒，默认 60）。
-
-#### `interface BalanceDetail`
-`{ balanceCny, availableBalanceCny, expiringBalanceCny, nextExpiryAt }` — 余额详情（旧 `/api/usage-summary` 的 data 子集，端点已 404）。平台余额分「充值」与「赠送（限时）」：`expiringBalanceCny` = 赠送余额（到期未用失效），`nextExpiryAt` = 最近到期时间（ISO 8601 UTC，无则 null）；**充值余额 = availableBalanceCny - expiringBalanceCny**。
-
-#### `queryBalanceDetail(cookie): Promise<BalanceDetail>`
-`GET https://senseaudio.cn/api/usage-summary`，头 `Cookie: tr_session=<value>`，20s 超时。**端点已 404（2026-09-23 平台改版），本函数稳定失败**，调用方静默降级。历史行为：API 可能以字符串返回金额，已强制 `Number()` 转换（`toNumber` 辅助）；401 抛"cookie 失效"。
-
-#### `queryAccountBalance(cookie): Promise<number>`
-委托 `queryBalanceDetail` 返回 `availableBalanceCny`（向后兼容）。
-
-#### `getBalanceDetailCached(cookie, ttlSec): Promise<BalanceDetail | undefined>`
-带 TTL 缓存的余额**详情**查询（按 cookie 粒度，缓存完整详情供 UI 展示两种余额+有效期）；查询失败返回 undefined（不抛错）。
-
-#### `getBalanceCached(cookie, ttlSec): Promise<number | undefined>`
-带 TTL 缓存的余额查询（委托 `getBalanceDetailCached` 返回可用余额数值）；查询失败返回 undefined（不抛错）。
-
-#### `interface ApiKeyListItem`
-`{ id, name, maskedKey, keyPrefix, status, lastUsedAt, createdAt }` — `GET /api/api-keys` 返回的 data 数组元素。`status` 为 `enabled`/`disabled`，`lastUsedAt` 可能为 null。
-
-#### `queryApiKeysByCookie(cookie): Promise<ApiKeyListItem[]>`
-`GET https://senseaudio.cn/api/api-keys`，头 `Cookie: tr_session=<value>`，20s 超时。**端点已 404（2026-09-23 平台改版），本函数稳定失败**，调用方静默降级。历史行为：仅需 `tr_session`（无 CSRF/反爬限制）；401 抛"cookie 失效"。
-
-#### `getApiKeysByCookieCached(cookie, ttlSec): Promise<ApiKeyListItem[] | undefined>`
-带 TTL 缓存的 API Key 列表查询（按 cookie 粒度）；查询失败返回 undefined（不抛错）。供管理界面展示 "平台 Key：N / 10"（`status==="enabled"` 的 key 数量 / 平台上限 10）。
-
-#### `formatExpiryDate(iso: string | null | undefined): string`
-格式化到期时间为 `YYYY-MM-DD`（本地时区）；无到期或非法日期返回空字符串。供管理界面展示赠送余额有效期。
-
-#### `checkKeyBalance(cookie): Promise<{ sufficient: boolean; balance?: number }>`
-检查余额是否充足并返回查询到的余额值（供日志/管理界面展示）。判定：余额 > minBalanceCny（默认 0，即余额 ≤ 0 视为不足）→ `sufficient=true`；查询失败（cookie 失效/网络）→ `{sufficient: true}`（不阻塞请求，回退被动检测——余额不足时 API 返回 402 触发轮换）。
-
-#### `isKeyBalanceSufficient(cookie): Promise<boolean>`
-判断余额是否充足（> minBalanceCny）；委托 `checkKeyBalance`；查询失败返回 true（不阻塞请求，回退被动检测）。
-
-#### `testKeyAvailability(entry, baseUrl?): Promise<{ ok: boolean | null; reason?: "balance" | "invalid" | "network" }>`
-手动检测可用性：有 cookie 先查余额（≤ 阈值 → `{ok:false, reason:"balance"}`）→ 发最小真实聊天请求（`say ok` + `max_tokens=8`）：200 → `{ok:true}`，402/`INSUFFICIENT_BALANCE` → `{ok:false, reason:"balance"}`，401 → `{ok:false, reason:"invalid"}`，网络/超时/其他 → `{ok:null}`（无法确定）。
-
----
-
-### 4.8 `src/apiModelList.ts`
+### 4.5 `src/models/apiModelList.ts`
 
 #### `interface ApiModelMetadata`
 `{ id, supports_responses?, supports_anthropic?, supports_vision?, supports_reasoning?, supports_tools?, context_length?, max_completion_tokens? }` — `/v1/models` 返回的扩展模型元数据（能力标记子集）。
@@ -996,7 +1051,7 @@ single 模式（fallback=switch）下是否应因当前 key 不可用而自动�
 
 ---
 
-### 4.7 `src/modelsDev.ts`
+### 4.6 `src/models/modelsDev.ts`
 
 #### `interface ModelsDevEntry`
 `{ id, name?, family?, reasoning?, tool_call?, structured_output?, temperature?, attachment?, modalities?, limit? }` — models.dev 数据库中单个模型条目的接口。
@@ -1009,7 +1064,7 @@ single 模式（fallback=switch）下是否应因当前 key 不可用而自动�
 
 ---
 
-### 4.8 `src/modelSync.ts`
+### 4.7 `src/models/modelSync.ts`
 
 #### `syncModelsOnStartup(context): Promise<void>`
 启动模型同步入口（fire-and-forget，不阻塞扩展激活）。流程：
@@ -1026,10 +1081,10 @@ single 模式（fallback=switch）下是否应因当前 key 不可用而自动�
 
 ---
 
-### 4.10 `src/provideModel.ts`
+### 4.8 `src/models/provideModel.ts`
 
 #### `prepareLanguageModelChatInformation(options, _token, _secrets): Promise<LanguageModelChatInformation[]>`
-获取模型信息列表。默认使用硬编码的内置模型列表（委托 `getBuiltInModelInfos()`）。当配置 `senseaudio.enableAutoModelDiscovery` 开启时（默认），用 `getPrimaryApiKey()` 获取主 key（任意有效 key 即可——`/v1/models` 不校验余额），从 API 获取可用模型 ID 列表，过滤内置模型（仅保留 API 中存在的模型），并从 models.dev 自动发现新增模型（默认 `thinkingMode="always"`）。启动时通过 `getResponsesSupportedModelIds()` / `getAnthropicSupportedModelIds()` 读取 `/v1/models` 的 `supports_responses` / `supports_anthropic` 标记，缓存到模块级集合供 `getResponsesModelIds()` / `getAnthropicModelIds()` 同步查询（不硬编码模型 ID，未来任何模型获得协议支持自动生效）。**末尾按 `senseaudio.apiMode` 过滤**：`anthropic` 仅保留 `supports_anthropic=true` 的模型，`responses` 仅保留 `supports_responses=true` 的模型（能力集合为空时回退全部）。API 不可用时静默回退到全量内置列表。自动发现模型与内置模型一致：`maxInputTokens` 按真实上下文的**可配置比例**声明（`getMaxInputTokensRatio()`，默认 `1.0`，建议 `0.8`），`context_length` / `max_completion_tokens` 保持真实值用于 API 请求体。
+获取模型信息列表。**先读 `senseaudio.enableAutoModelDiscovery`（默认开启）**——关闭时直接使用内置列表（不调 `/v1/models`、不查 models.dev，日志 `models.discovery` 的 `reason: "disabled_by_setting"`）。开启时用 `getPrimaryApiKey()` 获取主 key（任意有效 key 即可——`/v1/models` 不校验余额），从 API 获取可用模型 ID 列表，过滤内置模型（仅保留 API 中存在的模型），并从 models.dev 自动发现新增模型（默认 `thinkingMode="always"`）。启动时通过 `getResponsesSupportedModelIds()` / `getAnthropicSupportedModelIds()` 读取 `/v1/models` 的 `supports_responses` / `supports_anthropic` 标记，缓存到模块级集合供 `getResponsesModelIds()` / `getAnthropicModelIds()` 同步查询（不硬编码模型 ID，未来任何模型获得协议支持自动生效）。**末尾按 `senseaudio.apiMode` 过滤**：`anthropic` 仅保留 `supports_anthropic=true` 的模型，`responses` 仅保留 `supports_responses=true` 的模型（能力集合为空时回退全部）。API 不可用时静默回退到全量内置列表。自动发现模型与内置模型一致：`maxInputTokens` 按真实上下文的**可配置比例**声明（`getMaxInputTokensRatio()`，默认 `1.0`，建议 `0.8`），`context_length` / `max_completion_tokens` 保持真实值用于 API 请求体。
 
 #### `getResponsesModelIds(): Set<string>`
 同步返回当前探测到的 supports_responses=true 模型 ID 集（由 `prepareLanguageModelChatInformation` 在启动时更新）。provider.ts 在 auto 模式下查询此集合决定是否使用 Responses 协议。
@@ -1042,7 +1097,7 @@ single 模式（fallback=switch）下是否应因当前 key 不可用而自动�
 
 ---
 
-### 4.7 `src/provideToken.ts`
+### 4.9 `src/tokenizer/provideToken.ts`
 
 #### `const BaseTokensPerMessage = 3`
 每条消息的基础 Token 数。
@@ -1067,7 +1122,7 @@ single 模式（fallback=switch）下是否应因当前 key 不可用而自动�
 
 ---
 
-### 4.8 `src/utils.ts`
+### 4.10 `src/core/utils.ts`
 
 #### `interface ParsedModelId`
 `{ baseId: string; configId?: string }` — 解析后的模型 ID。
@@ -1088,13 +1143,13 @@ single 模式（fallback=switch）下是否应因当前 key 不可用而自动�
 将 VS Code 工具定义转换为 OpenAI 函数工具定义。
 
 #### `createRetryConfig(): RetryConfig`
-从 VS Code 设置中读取重试配置。
+从 VS Code 设置中读取 **HTTP 层**重试配置（`senseaudio.retry.enabled` / `maxAttempts` / `intervalMs` / `statusCodes`）。默认 `maxAttempts=2`、`intervalMs=1000`、`statusCodes=[]`（额外状态码，叠加在内置的 `[502, 504]` 之上）。与整轮层重试（`senseaudio.transientRetry*`）职责分离，详见「重试机制」。
 
 #### `executeWithRetry<T>(fn, retryConfig): Promise<T>`
-使用指数退避策略执行可重试的异步操作。
+使用指数退避策略执行可重试的异步操作（HTTP 层）。内置可重试状态码仅 `[502, 504]`（网关错误）——429/500/503 刻意**不**在此层重试，交由整轮层处理，避免两层相乘导致长时间挂起。
 
 #### `isRetryableError(error, retryableStatusCodes): boolean`
-判断错误是否可重试（网络错误 + 指定 HTTP 状态码）。
+判断错误是否可重试（网络错误 patterns + 指定 HTTP 状态码）。
 
 #### `isImageMimeType(mimeType): boolean`
 判断 MIME 类型是否为图片。
@@ -1113,7 +1168,7 @@ single 模式（fallback=switch）下是否应因当前 key 不可用而自动�
 
 ---
 
-### 4.23 `src/vision/types.ts`
+### 4.11 `src/vision/types.ts`
 
 #### `interface StoredImage`
 `{ data: Uint8Array; mimeType: string }` — 存储的图片数据，用于 ask_image 工具。
@@ -1138,7 +1193,7 @@ ask_image 工具定义的 OpenAI 格式（`type: "function"`），包含 `imageI
 
 ---
 
-### 4.24 `src/vision/imageProxy.ts`
+### 4.12 `src/vision/imageProxy.ts`
 
 #### `const PROVIDER_VENDOR`
 `"senseaudio"` — 本扩展注册语言模型的 vendor（`extension.ts` 中 `registerLanguageModelChatProvider("senseaudio", ...)`）。视觉代理**仅从本供应商**查找视觉模型，绝不跨供应商匹配同名模型（避免把图片请求路由到其他平台的同名模型，需不同授权/计费）。
@@ -1154,7 +1209,7 @@ ask_image 工具定义的 OpenAI 格式（`type: "function"`），包含 `imageI
 
 ---
 
-### 4.24b `src/vision/historyCodec.ts`（源自上游 opencode-go-copilot v1.9.2）
+### 4.13 `src/vision/historyCodec.ts`（源自上游 opencode-go-copilot v1.9.2）
 
 跨轮视觉历史编解码模块：把每轮完成的 ask_image 工具调用/结果序列化为私有 MIME 的 DataPart 负载，下一轮请求时解码并重建标准 tool call/tool result 消息。
 
@@ -1181,7 +1236,7 @@ ask_image 工具定义的 OpenAI 格式（`type: "function"`），包含 `imageI
 
 ---
 
-### 4.24c `src/vision/historyPart.ts`（源自上游 opencode-go-copilot v1.9.2）
+### 4.14 `src/vision/historyPart.ts`（源自上游 opencode-go-copilot v1.9.2）
 
 #### `createVisionToolHistoryPart(entry): vscode.LanguageModelDataPart`
 创建携带跨轮视觉历史的数据部分：`new vscode.LanguageModelDataPart(serializeVisionToolHistory(entry), VISION_TOOL_HISTORY_MIME)`。由 provider 每轮视觉代理完成后输出到响应流。
@@ -1191,92 +1246,22 @@ ask_image 工具定义的 OpenAI 格式（`type: "function"`），包含 `imageI
 
 ---
 
-### 4.25 `scripts/cookieApi/types.ts`
+### 4.15 `src/ui/statusBar.ts`
 
-#### `interface ApiResponse<T>`
-`{ code, message, data: T, traceId? }` — 用户中心 API 通用响应包装。
-
-#### `interface UsageSummary`
-`{ calls, successCalls, errorCalls, abortedCalls, inputTokens, outputTokens, costCny, balanceCny, frozenBalanceCny, availableBalanceCny, expiringBalanceCny, nextExpiryAt, currency }` — 用量 + 余额汇总。
-
-#### `interface CallLog`
-单条调用日志完整字段（时间、端点、协议、模型、Key 名称、状态、耗时、Token 用量、成本、finishReason 等）。
-
-#### `interface CallLogPage`
-`{ list: CallLog[] }` — 调用日志分页响应 data。
-
-#### `interface CallLogQueryParams`
-`{ startAt, endAt, page?, pageSize? }` — 调用日志查询参数。
-
-#### `interface CallLogStats`
-`{ total, byModel, byStatus, byKey, totalCostCny }` — 调用日志统计汇总。
-
----
-
-### 4.26 `scripts/cookieApi/cookieApi.ts`
-
-#### `const COOKIE_API_BASE_URL`
-`"https://senseaudio.cn"` — 用户中心 API 基础地址。
-
-#### `const TR_SESSION_COOKIE`
-`"tr_session"` — 登录会话 Cookie 名称常量。
-
-#### `apiGet<T>(sessionCookie, path, params?): Promise<ApiResponse<T>>`
-发送带 cookie 的 GET 请求并解析 JSON。401 时抛出"Cookie 失效"错误，非 2xx 或 `code !== 0` 时抛错。20 秒超时。
-
-#### `queryUsageSummary(sessionCookie): Promise<ApiResponse<UsageSummary>>`
-查询账号用量 + 余额汇总（`GET /api/usage-summary`）。
-
-#### `queryCallLogs(sessionCookie, params: CallLogQueryParams): Promise<CallLog[]>`
-查询调用日志分页（`GET /api/call-logs/page`），返回 `data.list`。
-
-#### `queryAllCallLogs(sessionCookie, startAt, endAt, options?): Promise<CallLog[]>`
-拉取时间范围内全部调用日志，自动翻页（`pageSize` 默认 100，`maxPages` 默认 10）。
-
-#### `summarizeCallLogs(logs: CallLog[]): CallLogStats`
-对调用日志按模型 / 状态 / Key 分组统计，计算总成本。
-
----
-
-### 4.27 `scripts/cookieApi/cli.ts`
-
-#### `main(): Promise<void>`
-CLI 入口：`node scripts/out/cookieApi/cli.js <tr_session值> [startAt] [endAt]`。依次输出账号汇总、调用日志明细表格（最多 50 条）、按模型/状态/Key 统计。`formatMoney` 参数类型为 `number | string`（API 金额字段可能以字符串返回，统一转 number 后格式化，非法值兜底 "0"，2026-08-14）。
-
----
-
-### 4.28 `scripts/export-call-logs.mjs`
-
-#### `main 流程`
-全量导出调用日志为 CSV。通过环境变量 `TR_SESSION` 传入 cookie（避免出现在命令行历史），自动翻页（每页 100 条）拉取时间范围内全部调用日志，输出 17 列精简 CSV（`# / requestAt / model / keyName / status / latencyMs / inputTokens / outputTokens / cacheReadTokens / reasoningTokens / costCny / apiSurface / finishReason / traceId / clientApp / stream / retryCount`）。
-
-用法：
-```bash
-$env:TR_SESSION="<tr_session值>"; node scripts/export-call-logs.mjs [startAt] [endAt] [outFile]
-```
-默认时间范围 `2026-08-03T00:00:00.000Z ~ 2026-08-05T00:00:00.000Z`，默认输出 `call-logs-export.csv`。
-
----
-
-### 4.29 `scripts/analyze-call-logs.mjs`
-
-#### `main 流程`
-分析导出的调用日志 CSV，输出统计摘要：调用总数、总成本、总输入/输出/缓存 Token；按模型（次数/成本/Token）、按 Key、按状态、按协议、按小时（UTC）分布；单次成本 TOP5。
-
-用法：`node scripts/analyze-call-logs.mjs [csv路径]`（默认读取 `call-logs-export.csv`）。
-
----
-
-### 4.9 `src/statusBar.ts`
-
-#### `initStatusBar(context): vscode.StatusBarItem`
-创建状态栏条目并重置累计计数器。**启动时不显示**（保持隐藏），仅在用户实际使用本插件模型时才显示。
+#### `initStatusBar(context, getLoginToken?): vscode.StatusBarItem`
+创建状态栏条目并重置累计计数器。主文本初始为 `$(pulse) --`，`command` 设为 `senseaudio.checkUsage`（点击即刷新套餐用量）。传入 `getLoginToken` 时启动套餐用量后台轮询（`startUsagePolling`），并注册配置变化监听（`showUsageInTooltip` / `showUsageInStatusBar` / `usageRefreshInterval` 变化时重启轮询并重渲染）。**启动时不显示**（保持隐藏），仅在用户实际使用本插件模型时才显示。
 
 #### `showTokenStatusBar(statusBarItem): void`
-显示状态栏并取消待执行的自动隐藏定时器。在 `provideLanguageModelChatResponse` 发起请求时调用。
+显示状态栏并取消待执行的自动隐藏定时器。在 `provideLanguageModelChatResponse` 发起请求时调用。`isStatusBarEnabled()` 为 false（高级 Token 指示器与套餐用量显示均关闭）时直接隐藏。
+
+#### `isStatusBarEnabled(): boolean`（模块级私有）
+状态栏可见性总开关 = `enableThirdPartyTokenIndicator` OR `showUsageInStatusBar` OR `showUsageInTooltip`。**不可只用 `enableThirdPartyTokenIndicator` 把关**（默认 false，会导致套餐用量永远不可见）。
 
 #### `scheduleStatusBarHide(statusBarItem, delayMs?): void`
 调度状态栏自动隐藏（默认空闲 60 秒后隐藏，可被下一次请求取消）。在请求结束（finally）时调用，确保切换其他模型后状态栏不会残留。
+
+#### `refreshPlanUsageNow(): Promise<PlanUsageSnapshot | null>`
+强制立即刷新套餐用量（`senseaudio.checkUsage` 命令与点击状态栏使用）：`getPlanUsageCached(token, true)` 绕过 TTL 强制拉取，完成后重渲染主文本与 tooltip 并返回快照。无登录 token 时返回 null。
 
 #### `formatTokenCount(value): string`
 格式化 Token 数为人类可读格式 (K/M/B)。
@@ -1284,8 +1269,11 @@ $env:TR_SESSION="<tr_session值>"; node scripts/export-call-logs.mjs [startAt] [
 #### `createProgressBar(usedTokens, maxTokens): string`
 创建视觉进度条（使用 Unicode 块字符 ▁▂▃▄▅▆▇█）。
 
-#### `updateContextStatusBar(messages, tools, model, statusBarItem, modelConfig): Promise<void>`
-更新状态栏文本：显示当前消息的 Token 用量和进度条。新对话时重置累计计数器。
+#### `updateContextStatusBar(messages, tools, model, statusBarItem, modelConfig): Promise<number>`
+更新状态栏：`showUsageInStatusBar` 开启时主文本交给套餐用量（`updateStatusBarUsageText`），否则显示 Token 用量与进度条；tooltip 始终显示累计 Token。新对话时重置累计计数器。返回估算输入 Token 数（供 fallback usage）。
+
+#### `updateStatusBarWithApiPrompt(apiPromptTokens, maxTokens, statusBarItem): void`
+API 返回用量数据后重渲染状态栏。`showUsageInStatusBar` 开启时**不改主文本**（套餐用量占位），仅刷新 tooltip。
 
 #### `resetCumulativeCounters(): void`
 重置所有累计 Token 计数器（VS Code 启动和新对话时调用）。
@@ -1294,11 +1282,26 @@ $env:TR_SESSION="<tr_session值>"; node scripts/export-call-logs.mjs [startAt] [
 将流式用量累计到全局计数器。
 
 #### `updateCumulativeTooltip(statusBarItem): void`
-更新状态栏工具提示，显示累计输入/输出 Token 数和缓存命中率。
+更新状态栏工具提示：累计输入/输出 Token 数、缓存命中率，以及（启用且有缓存时）套餐用量区块（三窗口 + 5h 重置倒计时 + 余额 + 计费模式说明）。
+
+#### `updateStatusBarUsageText(statusBarItem): void`（模块级私有）
+渲染状态栏主文本：额度内 `$(pulse) 5H 65%` / 额度耗尽 `$(pulse) 余额 ¥358.78` / 无数据 `$(pulse) --`。`showUsageInStatusBar` 关闭时直接返回（由 Token 计数接管）。
+
+#### `appendPlanUsageTooltipLines(lines): void`（模块级私有）
+将套餐用量区块追加到 tooltip 行数组：配置关闭或无缓存时直接返回；每个窗口一行（`5H——0% (0 / 10,000 积分)`）+ 5h 重置倒计时行 + 余额行 + 计费模式说明行。
+
+#### `refreshPlanUsage(): Promise<void>`（模块级私有）
+后台刷新（fire-and-forget）：无 token 或已有刷新在途时跳过；成功后重渲染主文本与 tooltip。
+
+#### `startUsagePolling() / stopUsagePolling(): void`（模块级私有）
+启动/停止轮询定时器。`startUsagePolling` 先停旧定时器，立即触发一次刷新后按 `usageRefreshInterval`（夹取 1-60 分钟）定时刷新，输出 `planUsage.poll.start`/`planUsage.poll.stop`（debug）。
+
+#### `isUsageInStatusBarEnabled() / isUsageTooltipEnabled() / getUsageRefreshIntervalMs(): boolean | number`（模块级私有）
+读取 `senseaudio.showUsageInStatusBar`（默认 true）/ `senseaudio.showUsageInTooltip`（默认 true）/ `senseaudio.usageRefreshInterval`（默认 5 分钟，夹取 1-60）。
 
 ---
 
-### 4.10 `src/logger.ts`
+### 4.16 `src/core/logger.ts`
 
 #### `class Logger`
 
@@ -1317,7 +1320,7 @@ $env:TR_SESSION="<tr_session值>"; node scripts/export-call-logs.mjs [startAt] [
 
 ---
 
-### 4.11 `src/localize.ts`
+### 4.17 `src/core/localize.ts`
 
 #### `l10n(key): string`
 获取当前语言的本地化字符串。当前支持简体中文 (`zh-cn`)，回退到英文 key。
@@ -1327,7 +1330,7 @@ $env:TR_SESSION="<tr_session值>"; node scripts/export-call-logs.mjs [startAt] [
 
 ---
 
-### 4.12 `src/versionManager.ts`
+### 4.18 `src/core/versionManager.ts`
 
 #### `class VersionManager`
 
@@ -1339,7 +1342,7 @@ $env:TR_SESSION="<tr_session值>"; node scripts/export-call-logs.mjs [startAt] [
 
 ---
 
-### 4.13 `src/openai/openaiTypes.ts`
+### 4.19 `src/api/openai/openaiTypes.ts`
 
 #### `interface OpenAIToolCall`
 `{ id, type: "function", function: { name, arguments } }` — OpenAI 工具调用。
@@ -1373,7 +1376,7 @@ $env:TR_SESSION="<tr_session值>"; node scripts/export-call-logs.mjs [startAt] [
 
 ---
 
-### 4.14 `src/openai/openaiApi.ts`
+### 4.20 `src/api/openai/openaiApi.ts`
 
 #### `class OpenaiApi extends CommonApi<OpenAIChatMessage, Record<string, unknown>>`
 
@@ -1397,7 +1400,7 @@ $env:TR_SESSION="<tr_session值>"; node scripts/export-call-logs.mjs [startAt] [
 
 ---
 
-### 4.15 `src/anthropic/anthropicTypes.ts`
+### 4.21 `src/api/anthropic/anthropicTypes.ts`
 
 #### `type AnthropicRole`
 `"user" | "assistant"`
@@ -1437,7 +1440,7 @@ Anthropic 请求体。包含 `model`, `messages`, `max_tokens`, `system`, `strea
 
 ---
 
-### 4.16 `src/anthropic/anthropicApi.ts`
+### 4.22 `src/api/anthropic/anthropicApi.ts`
 
 #### `class AnthropicApi extends CommonApi<AnthropicMessage, AnthropicRequestBody>`
 
@@ -1468,7 +1471,7 @@ Anthropic 请求体。包含 `model`, `messages`, `max_tokens`, `system`, `strea
 
 ---
 
-### 4.17 `src/responses/responsesTypes.ts`
+### 4.23 `src/api/responses/responsesTypes.ts`
 
 #### `interface ResponsesContentBlock`
 `{ type: "input_text" | "output_text" | "input_image"; text?; image_url?; annotations? }` — Responses 内容块（仅这三种类型被 SenseAudio 端点接受）。
@@ -1499,7 +1502,7 @@ Anthropic 请求体。包含 `model`, `messages`, `max_tokens`, `system`, `strea
 
 ---
 
-### 4.18 `src/responses/responsesApi.ts`
+### 4.24 `src/api/responses/responsesApi.ts`
 
 #### `class ResponsesApi extends CommonApi<ResponsesInputMessage, Record<string, unknown>>`
 
@@ -1536,7 +1539,7 @@ Anthropic 请求体。包含 `model`, `messages`, `max_tokens`, `system`, `strea
 
 ---
 
-### 4.19 `src/gitCommit/commitMessageGenerator.ts`
+### 4.25 `src/gitCommit/commitMessageGenerator.ts`
 
 #### `let commitGenerationAbortController: AbortController | undefined`
 全局中止控制器。
@@ -1563,7 +1566,7 @@ Anthropic 请求体。包含 `model`, `messages`, `max_tokens`, `system`, `strea
 静默检查 API Key（经 keyManager.getApiKeyStore），返回 active（或第一个）key 条目；**无任何 key 时静默返回 undefined，不弹输入框**（2026-09-18 移除弹窗引导），由调用方抛出 "SenseAudio API key not found" 错误。
 
 #### `performCommitMsgGeneration(secrets, gitDiff, inputBox, repoPath?): Promise<void>`
-核心生成逻辑。构建 prompt（含自定义提示词、最近提交风格、用户输入、diff 内容），支持 `auto` 语言模式（由模型根据历史 commit 风格自动推断），创建 API 实例，流式输出提交消息到 InputBox。API 协议选择遵循 `senseaudio.apiMode` 设置（`auto` 跟随模型默认，或强制 `openai`/`anthropic`/`responses`；`enableResponsesApi` 关闭时 auto 模式下的 responses 模型回退 openai），并将生效的 apiMode 写回 `selectedModel.apiMode` 以确保 `createMessage()` 构造正确的请求头（anthropic 用 `x-api-key`，openai/responses 用 `Bearer`）。支持通过配置 `senseaudio.commitIncludeCommitDiff` 控制风格参考中是否包含历史提交的实际代码变更（默认关闭）。支持通过配置 `senseaudio.commitAttachContextFiles`（默认开启）控制是否将仓库根目录的 `AGENTS.md` 和 `README.md` 内容附加到 prompt 中作为额外上下文。**多 key 轮换循环**：生成器消费包 while 循环，`pickNextApiKey` → 余额预检（cookie）→ `createMessage` 流式消费；`failedKeys` 跟踪每个 key 失败原因，全部 key 用尽时（`failedKeys.size >= totalKeys`）报错列出脱敏 key+原因并区分瞬态（429/503→"请稍后重试"）与确定性（→"用管理命令检测"）；轮换错误换 key 重试（若已产生部分输出则不换 key，避免覆盖 InputBox 内容；轮换原因经 `getKeyRotationReason` 提取，修复了原固定 `api_error` 导致 429/503 被持久化为不可用的 bug）；`pickNextApiKey` 无可用 key 的兜底报错同样列出每个 key 的原因（`buildAllKeysUnavailableDetail`）；single 模式的 fallback=switch 同样仅在余额不足（402/预检）时切换并经 `setActiveKeyByValue` 设为当前（`shouldSingleKeyFallbackSwitch` 判定），其他错误不切换、走 single 专属报错文案；用户取消立即中止。
+核心生成逻辑。构建 prompt（含自定义提示词、最近提交风格、用户输入、diff 内容），支持 `auto` 语言模式（由模型根据历史 commit 风格自动推断），创建 API 实例，流式输出提交消息到 InputBox。API 协议选择遵循 `senseaudio.apiMode` 设置（`auto` 跟随模型默认，或强制 `openai`/`anthropic`/`responses`；`enableResponsesApi` 关闭时 auto 模式下的 responses 模型回退 openai），并将生效的 apiMode 写回 `selectedModel.apiMode` 以确保 `createMessage()` 构造正确的请求头（anthropic 用 `x-api-key`，openai/responses 用 `Bearer`）。支持通过配置 `senseaudio.commitIncludeCommitDiff` 控制风格参考中是否包含历史提交的实际代码变更（默认关闭）。支持通过配置 `senseaudio.commitAttachContextFiles`（默认开启）控制是否将仓库根目录的 `AGENTS.md` 和 `README.md` 内容附加到 prompt 中作为额外上下文。**多 key 轮换循环**：生成器消费包 while 循环，`pickNextApiKey` → `createMessage` 流式消费；`failedKeys` 跟踪每个 key 失败原因，全部 key 用尽时（`failedKeys.size >= totalKeys`）报错列出脱敏 key+原因并区分瞬态（429/503→"请稍后重试"）与确定性（→"用管理命令检测"）；轮换错误换 key 重试（若已产生部分输出则不换 key，避免覆盖 InputBox 内容；轮换原因经 `getKeyRotationReason` 提取，修复了原固定 `api_error` 导致 429/503 被持久化为不可用的 bug）；`pickNextApiKey` 无可用 key 的兜底报错同样列出每个 key 的原因（`buildAllKeysUnavailableDetail`）；single 模式的 fallback=switch 同样仅在余额不足（402）时切换并经 `setActiveKeyByValue` 设为当前（`shouldSingleKeyFallbackSwitch` 判定），其他错误不切换、走 single 专属报错文案；成功后若该 key 曾被标记不可用则自愈置可用（`markApiKeyAvailable`，与 `provider/rotation.ts` 一致）；用户取消立即中止。
 
 #### `abortCommitGeneration(): void`
 中止提交消息生成。
@@ -1576,7 +1579,7 @@ Anthropic 请求体。包含 `model`, `messages`, `max_tokens`, `system`, `strea
 
 ---
 
-### 4.20 `src/gitCommit/gitUtils.ts`
+### 4.26 `src/gitCommit/gitUtils.ts`
 
 #### `interface GitCommit`
 `{ hash, shortHash, subject, author, date }` — Git 提交信息。
@@ -1607,7 +1610,7 @@ Anthropic 请求体。包含 `model`, `messages`, `max_tokens`, `system`, `strea
 
 ---
 
-### 4.21 `src/tokenizer/tokenizerManager.ts`
+### 4.27 `src/tokenizer/tokenizerManager.ts`
 
 #### `class TokenCache`
 简单 LRU 缓存。
@@ -1639,7 +1642,7 @@ Anthropic 请求体。包含 `model`, `messages`, `max_tokens`, `system`, `strea
 
 ---
 
-### 4.22 `src/tokenizer/imageUtils.ts`
+### 4.28 `src/tokenizer/imageUtils.ts`
 
 #### `getImageDimensions(base64): { width, height }`
 从 Base64 图片字符串中获取尺寸。根据 MIME 类型分发到不同解析函数。
@@ -1666,12 +1669,12 @@ Anthropic 请求体。包含 `model`, `messages`, `max_tokens`, `system`, `strea
 ### 5.1 编译命令
 
 ```bash
-# TypeScript 编译
+# TypeScript 编译（tsc + 生成编译元信息 + 设置项一致性核对）
 npm run compile
-# 等效于: npx tsc -p ./
+# 等效于: npx tsc -p ./ && node scripts/build/build-info.mjs && node scripts/dev/check-settings.mjs
 
-# scripts 目录独立编译（cookieApi 等独立脚本，输出到 scripts/out）
-npx tsc -p scripts/tsconfig.json
+# 完整审计（设置漂移 / 未使用导出 / 未使用 l10n / nls 一致性 / 命令声明 / 文档路径 / 测试路径）
+npm run audit
 
 # ESLint 检查
 npm run lint
@@ -1684,11 +1687,11 @@ npm run watch
 
 # 打包 VSIX
 npm run build
-# 等效于: node scripts/package-vsix.mjs
+# 等效于: node scripts/build/package-vsix.mjs
 # 输出名固定为 <name>-<version>.vsix（如 senseaudio-copilot-1.10.0.vsix），不使用 vsce 默认的 extension.vsix
 ```
 
-> `npm run compile` 在 `tsc` 编译后自动运行 `scripts/build-info.mjs`，生成 `out/build-info.json`（版本号 + 编译时间，标注 IANA 时区与 UTC 偏移）并追加记录到 `.copilot/build-log.md`。详见 6.1b「编译产物元信息铁律」。
+> `npm run compile` 在 `tsc` 编译后自动运行 `scripts/build/build-info.mjs`（生成编译元信息）与 `scripts/dev/check-settings.mjs`（设置项一致性核对，有漂移则编译失败）。详见 6.1b「编译产物元信息铁律」。
 
 ### 5.2 编译配置 (tsconfig.json)
 
@@ -1702,7 +1705,7 @@ npm run build
 | `rootDir` | `src` |
 | `exclude` | `["scripts", "node_modules", "out"]` |
 
-> `scripts/` 目录有独立 `tsconfig.json`（`rootDir: "."`，`outDir: "out"`，仅包含 `cookieApi/**/*.ts`），用 `npx tsc -p scripts/tsconfig.json` 编译，输出到 `scripts/out/`。
+> `scripts/` 目录下的 `.mjs` / `.js` 脚本为纯 Node ESM/CJS，不参与 `tsc` 编译（`tsconfig.json` 的 `exclude` 已排除 `scripts`）。
 
 ### 5.3 依赖
 
@@ -1734,7 +1737,7 @@ npm run build
 
 > **每次编译产物必须包含版本号和编译时间（标注时区）。**
 >
-> `npm run compile` 会在 `tsc` 编译后自动运行 `scripts/build-info.mjs`，生成：
+> `npm run compile` 会在 `tsc` 编译后自动运行 `scripts/build/build-info.mjs`，生成：
 > - `out/build-info.json` —— 随扩展打包的编译元信息（`version` / `buildTime`（UTC ISO 8601）/ `buildTimeLocal` / `timezone`（IANA 时区）/ `timezoneOffset`（UTC 偏移）/ `buildTimeDisplay`（本地时间 + 时区 + UTC 偏移））
 > - `.copilot/build-log.md` —— 开发者侧编译日志，每次编译追加一行（编译时间 + 版本号 + 时区）
 >
@@ -1881,7 +1884,7 @@ type 取值：`feat` | `fix` | `refactor` | `docs` | `chore` | `improve` 等。
 
 ### 6.9 错误处理策略
 
-- 网络请求使用 `executeWithRetry()`（默认 3 次重试，指数退避）
+- 网络请求使用 `executeWithRetry()`（HTTP 层，默认 2 次，仅网关错误 502/504 + 网络错误）；平台错误（429/500/503）由整轮层 `tryTransientRetryRound` 处理（默认 3 次）
 - API 认证失败 → 弹出输入框提示用户输入
 - 请求超时 → 友好的本地化错误消息
 - 流式解析错误 → 记录日志，继续处理（不中断流）

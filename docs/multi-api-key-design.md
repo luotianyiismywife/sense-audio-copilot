@@ -1,5 +1,16 @@
 # 多 API Key 轮询与余额自动切换 — 设计方案（已实施）
 
+> ⚠️ **2026-09-27 更新：本文档中「主动余额预检」相关设计已废弃并从代码中删除。**
+> 旧平台 cookie 端点 `senseaudio.cn/api/usage-summary` 与 `/api/api-keys` 已于 2026-09-23 实测 **404**
+> （平台改版为三域认证体系），因此以下内容**仅作历史记录**，不再反映当前实现：
+> - `queryBalanceDetail` / `queryAccountBalance` / `queryApiKeysByCookie` / `getBalanceDetailCached` / `getBalanceCached`
+> - `checkKeyBalance` / `isKeyBalanceSufficient` 主动余额预检（`balanceCheckEnabled` 开关）
+> - `BalanceDetail` / `ApiKeyListItem` 类型、平台 Key 数量展示（`平台 Key：N / 10`）
+>
+> **当前实现**：余额不足完全由 API 返回 **402** 触发被动轮换；余额展示改为登录 PASETO token 查
+> `platform.senseaudio.cn/api/user/self`（按**账号**粒度，所有 key 共享），见 `src/balance/accountInfo.ts`。
+> 轮换循环见 `src/provider/rotation.ts`，key 管理见 `src/keys/`。
+
 > 状态：**已实施**（v1.8.0 起完整落地，v1.9.0 增强）| 设计日期：2026-08-09 | 最后更新：2026-08-15 | 适用范围：聊天请求、Git 提交消息生成、模型列表、启动同步、手动检测
 >
 > **2026-08-09 实测确认（用户提供 cookie + 对应 key）：**
@@ -108,7 +119,7 @@ const balanceCache = new Map<string, BalanceCacheEntry>();
 
 ## 3. 关键函数设计
 
-### 3.1 `src/keyManager.ts`
+### 3.1 `src/keys/keyManager.ts`（barrel；实现拆分至 `src/keys/`）
 
 | 函数 | 签名 | 职责 |
 |------|------|------|
@@ -168,7 +179,7 @@ pickNextApiKey(secrets, mode):
   return undefined   // 全部不可用或冷却中
 ```
 
-### 3.3 `src/balanceCheck.ts`（独立实现，不依赖 scripts/cookieApi）
+### 3.3 `src/balance/balanceCheck.ts`（barrel；实现拆分至 `src/balance/`）
 
 | 函数 | 签名 | 职责 |
 |------|------|------|
@@ -386,8 +397,8 @@ pickNextApiKey(secrets, mode):
 
 ## 7. 实施步骤（已全部完成）
 
-1. **Phase 1** `src/keyManager.ts`：数据模型 + 迁移 + 状态管理 + 选择逻辑 ✅
-2. **Phase 2** `src/balanceCheck.ts`：余额查询 + TTL 缓存 + 手动检测 ✅（v1.9.0 升级为详情查询）
+1. **Phase 1** `src/keys/keyManager.ts`：数据模型 + 迁移 + 状态管理 + 选择逻辑 ✅
+2. **Phase 2** `src/balance/balanceCheck.ts`：余额查询 + TTL 缓存 + 手动检测 ✅（v1.9.0 升级为详情查询）
 3. **Phase 3** `package.json` 设置 + 命令 + `package.nls*.json` + `localize.ts` ✅
 4. **Phase 4** `extension.ts`：注册 `manageApiKeys` 命令（QuickPick 全部动作 + 批量导入 + 编辑 + 余额显示）✅
 5. **Phase 5** `provider.ts`：聊天请求轮换循环接入（核心 + 瞬态整轮重试）✅
@@ -419,7 +430,7 @@ pickNextApiKey(secrets, mode):
 1. **余额竞态**：预检与请求之间存在时间差（余额刚被其他请求花光），被动检测兜底。
 2. **cookie 会话过期**：QuickPick 显示绑定状态并允许更新；检测时提示重新绑定。
 3. **429/503 可能为账号级/平台级限流**：换 key 不一定有效，但尝试切换无害；全部 key 瞬态失败时整轮自动重试（退避）兜底。
-4. **不改造 `scripts/cookieApi`**：独立 tsconfig，`src/balanceCheck.ts` 独立实现。
+4. **不改造 `scripts/cookieApi`**：独立 tsconfig，`src/balance/` 独立实现。
 5. **不引入 VS Code proposed API**。
 6. **手动检测的"请求一次"用最小真实聊天请求**（`say ok` + `max_tokens=8`）：余额不足时被 402 拦截不消耗 token；`/v1/models` 不校验余额（余额 < 0 也 200），无法作为可用性判据。
 7. **视觉代理轮内失败不轮换**：见 4.2 D2 设计理由。
