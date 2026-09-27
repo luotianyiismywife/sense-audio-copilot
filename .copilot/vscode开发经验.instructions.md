@@ -45,6 +45,9 @@ description: "Use when: 需要操作浏览器（市场上传/审核、GitHub Rel
 > 2. **reCAPTCHA iframe 网络层**：绕过 CSP 后 `api2/anchor`（widget 加载）仍持续 `ERR_ABORTED`——reCAPTCHA iframe 根本不渲染（页面无 google.com iframe），手动 `grecaptcha.render()` 能建 widget 但 `execute()` 拿不到 token（iframe 内部网络栈不受页面级 CDP 控制）。**此层无法绕过**。
 > 3. **结论**：内置浏览器上传市场这条路在 1.138 已死（此前版本可行，疑似 VS Code 更新引入更严格的 iframe 隔离）。**替代方案：Firefox Nightly + Marionette MCP**（见 1.2b）。
 
+> ✅ **内置浏览器恢复可用（2026-09-27 v1.2.0 发布实测，推翻上述"已死"结论）**：同一环境再次发布时，内置浏览器**完整走通了市场上传**——reCAPTCHA iframe 这次正常渲染（显示"此网站已超出 reCAPTCHA Enterprise 免费配额"提示但**未阻塞**上传），`api2/clr` 仍被 CSP 拦截（console 报错）但**不影响上传流程**。Upload 点击后直接完成，列表显示 `Verifying <版本>`。**推测**：VS Code 或 marketplace 侧更新放宽了 iframe 隔离，或 reCAPTCHA 配额状态变化。**结论修正**：内置浏览器上传市场**应先尝试**（流程：More Actions... → Update → `page.setInputFiles('#file-upload', ...)` → Upload），失败再回退 Firefox Nightly 方案。
+> **上传流程要点（Update 已有扩展）**：① 必须用扩展行的 **More Actions... → Update**（"New extension" 流程会报 "extension already exists"）；② `#file-upload` 隐藏但 `page.setInputFiles` 可直接注入；③ GitHub Release 附件上传用 `waitForEvent('filechooser')` + `chooser.setFiles()`，**发布时附件可能未传完**（点 Publish 后附件丢失）——需进编辑页补传并 Update release；④ GitHub Release 的 `#releases-upload` input 上 `setInputFiles` 可能静默失败（files.length=0），需用 filechooser 事件路径。
+
 ### 1.2b Firefox Nightly + Marionette MCP 上传市场（✅ 已验证 2026-09-22 v1.0.0）
 
 > VS Code 内置浏览器无法上传市场时的替代方案。Firefox Nightly（`C:\Program Files\Firefox Nightly\firefox.exe`，157.0a1）无 CSP 限制，且可被 firefox-devtools MCP 控制。
