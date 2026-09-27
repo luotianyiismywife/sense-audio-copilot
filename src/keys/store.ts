@@ -1,6 +1,14 @@
 import * as vscode from "vscode";
 import { logger } from "../core/logger";
-import { LEGACY_KEY, STORE_KEY, getRotationIndex, getStoreCache, setRotationIndex, setStoreCache } from "./state";
+import {
+    LEGACY_KEY,
+    STORE_KEY,
+    getRotationIndex,
+    getStoreCache,
+    getTransientExhaustedMap,
+    setRotationIndex,
+    setStoreCache,
+} from "./state";
 import type { ApiKeyEntry, ApiKeyStore } from "./types";
 
 /**
@@ -142,13 +150,18 @@ export async function addApiKeys(
     return { added, updated };
 }
 
-/** 删除 key；自动修正 activeIndex 与轮询游标 */
+/** 删除 key；自动修正 activeIndex 与轮询游标，并清理该 key 的瞬态冷却条目 */
 export async function removeApiKey(secrets: vscode.SecretStorage, index: number): Promise<void> {
     const store = await getApiKeyStore(secrets);
     if (index < 0 || index >= store.keys.length) {
         return;
     }
-    store.keys.splice(index, 1);
+    const [removed] = store.keys.splice(index, 1);
+    // 清理被删 key 的瞬态冷却条目（避免内存残留；也防止之后添加相同 value
+    // 的新 key 时意外继承旧冷却状态）
+    if (removed) {
+        getTransientExhaustedMap().delete(removed.value);
+    }
     if (store.activeIndex >= store.keys.length) {
         store.activeIndex = store.keys.length > 0 ? store.keys.length - 1 : 0;
     }

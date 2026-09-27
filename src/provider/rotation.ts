@@ -76,7 +76,11 @@ export async function runKeyRotationLoop(params: RotationLoopParams): Promise<vo
     // rate-limited, wait with backoff and retry the whole round instead of
     // failing immediately (platform congestion usually clears within seconds).
     const maxTransientRetries = getTransientRetryTimes();
-    let transientRetryCount = 0;
+    // Per-scenario retry counters: a 500 same-key retry must not consume the
+    // 429/503 whole-round retry quota (and vice versa) — otherwise a few 500s
+    // could exhaust the quota and give up on a recoverable rate-limit burst.
+    let wholeRoundRetryCount = 0; // all keys transient-failed / none eligible
+    let sameKeyRetryCount = 0; // platform-side error, retry same key
 
     const store = await getApiKeyStore(secrets);
     if (store.keys.length === 0) {
@@ -94,8 +98,8 @@ export async function runKeyRotationLoop(params: RotationLoopParams): Promise<vo
             const hasTransient = [...failedKeys.values()].some((r) => r === "rate_limited" || r === "server_error");
             // Platform busy / rate-limited: back off and retry the whole
             // round automatically instead of failing immediately.
-            if (hasTransient && (await tryTransientRetryRound(secrets, transientRetryCount, maxTransientRetries))) {
-                transientRetryCount++;
+            if (hasTransient && (await tryTransientRetryRound(secrets, wholeRoundRetryCount, maxTransientRetries))) {
+                wholeRoundRetryCount++;
                 failedKeys.clear();
                 continue;
             }
@@ -136,9 +140,9 @@ export async function runKeyRotationLoop(params: RotationLoopParams): Promise<vo
                 // cooldown (429/503), back off and retry the whole round.
                 if (
                     (await hasTransientExhaustedKey(secrets)) &&
-                    (await tryTransientRetryRound(secrets, transientRetryCount, maxTransientRetries))
+                    (await tryTransientRetryRound(secrets, wholeRoundRetryCount, maxTransientRetries))
                 ) {
-                    transientRetryCount++;
+                    wholeRoundRetryCount++;
                     failedKeys.clear();
                     continue;
                 }
@@ -217,22 +221,22 @@ export async function runKeyRotationLoop(params: RotationLoopParams): Promise<vo
             // is having trouble). Do NOT mark the key or rotate: just back off
             // and retry the whole round with the same key.
             if (isTransientRetryError(err)) {
-                if (await tryTransientRetryRound(secrets, transientRetryCount, maxTransientRetries)) {
-                    transientRetryCount++;
+                if (await tryTransientRetryRound(secrets, sameKeyRetryCount, maxTransientRetries)) {
+                    sameKeyRetryCount++;
                     failedKeys.clear();
                     // Force the SAME key on the next round: 500 is a platform
                     // problem, not a key problem — do not rotate keys.
                     forceKey = currentEntry;
                     logger.warn("key.transientRetrySameKey", {
                         key: maskApiKey(currentEntry.value),
-                        attempt: transientRetryCount,
+                        attempt: sameKeyRetryCount,
                         error: err instanceof Error ? err.message : String(err),
                     });
                     continue; // retry the whole round with the same key
                 }
                 logger.warn("key.transientRetryExhausted", {
                     key: maskApiKey(currentEntry.value),
-                    attempts: transientRetryCount,
+                    attempts: sameKeyRetryCount,
                 });
             }
 

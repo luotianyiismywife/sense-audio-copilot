@@ -306,7 +306,10 @@ async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff
         // rate-limited, wait with backoff and retry the whole round instead of
         // failing immediately (platform congestion usually clears within seconds).
         const maxTransientRetries = getTransientRetryTimes();
-        let transientRetryCount = 0;
+        // Per-scenario retry counters (mirrors provider/rotation.ts): a 500
+        // same-key retry must not consume the 429/503 whole-round quota.
+        let wholeRoundRetryCount = 0;
+        let sameKeyRetryCount = 0;
 
         while (true) {
             // If every key has failed at least one round, stop trying.
@@ -317,8 +320,8 @@ async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff
                 const hasTransient = [...failedKeys.values()].some((r) => r === "rate_limited" || r === "server_error");
                 // Platform busy / rate-limited: back off and retry the whole
                 // round automatically instead of failing immediately.
-                if (hasTransient && (await tryTransientRetryRound(secrets, transientRetryCount, maxTransientRetries))) {
-                    transientRetryCount++;
+                if (hasTransient && (await tryTransientRetryRound(secrets, wholeRoundRetryCount, maxTransientRetries))) {
+                    wholeRoundRetryCount++;
                     failedKeys.clear();
                     continue;
                 }
@@ -353,9 +356,9 @@ async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff
                     // cooldown (429/503), back off and retry the whole round.
                     if (
                         (await hasTransientExhaustedKey(secrets)) &&
-                        (await tryTransientRetryRound(secrets, transientRetryCount, maxTransientRetries))
+                        (await tryTransientRetryRound(secrets, wholeRoundRetryCount, maxTransientRetries))
                     ) {
-                        transientRetryCount++;
+                        wholeRoundRetryCount++;
                         failedKeys.clear();
                         continue;
                     }
@@ -441,19 +444,19 @@ async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff
                 // platform is having trouble). Do NOT mark the key or rotate:
                 // just back off and retry the whole round with the same key.
                 if (isTransientRetryError(err)) {
-                    if (await tryTransientRetryRound(secrets, transientRetryCount, maxTransientRetries)) {
-                        transientRetryCount++;
+                    if (await tryTransientRetryRound(secrets, sameKeyRetryCount, maxTransientRetries)) {
+                        sameKeyRetryCount++;
                         failedKeys.clear();
                         logger.warn("commit.key.transientRetrySameKey", {
                             key: entry.value.slice(0, 6) + "****",
-                            attempt: transientRetryCount,
+                            attempt: sameKeyRetryCount,
                             error: err instanceof Error ? err.message : String(err),
                         });
                         continue; // retry the whole round (same key will be re-picked)
                     }
                     logger.warn("commit.key.transientRetryExhausted", {
                         key: entry.value.slice(0, 6) + "****",
-                        attempts: transientRetryCount,
+                        attempts: sameKeyRetryCount,
                     });
                 }
 

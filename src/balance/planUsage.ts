@@ -101,6 +101,8 @@ export type PlanUsageFetchStatus = AccountInfoFetchStatus | "no-token";
 let cachedSnapshot: PlanUsageSnapshot | null = null;
 let cacheTimestamp = 0;
 let lastFetchStatus: PlanUsageFetchStatus = "no-token";
+// 缓存所属的 token：换账号（token 变化）后旧账号快照不得再被同步读取返回
+let cachedToken: string | undefined;
 
 /**
  * 把 `AccountInfo` 归一化为快照。
@@ -151,6 +153,12 @@ export async function getPlanUsageCached(
         return cachedSnapshot;
     }
 
+    // 换账号（token 变化）后旧账号快照立即失效，避免状态栏短暂显示他人数据
+    if (cachedToken !== undefined && cachedToken !== loginToken) {
+        cachedSnapshot = null;
+        cacheTimestamp = 0;
+    }
+
     const ttlSec = getBalanceCheckIntervalSec();
     if (!force && cachedSnapshot && ttlSec > 0 && Date.now() - cacheTimestamp < ttlSec * 1000) {
         return cachedSnapshot;
@@ -166,6 +174,7 @@ export async function getPlanUsageCached(
 
     cachedSnapshot = buildSnapshot(info);
     cacheTimestamp = Date.now();
+    cachedToken = loginToken;
     logger.info("planUsage.fetch.ok", {
         windows: cachedSnapshot.windows.length,
         billingMode: cachedSnapshot.billingMode,

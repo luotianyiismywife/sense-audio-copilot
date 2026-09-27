@@ -181,6 +181,7 @@ const zhCN: Record<string, string> = {
 	"Pulled {0} keys from cloud Gist": "已从云端 Gist 拉取 {0} 个 Key",
 	"Cloud sync: pulled {0} keys from Gist on startup": "云同步：启动时已从 Gist 拉取 {0} 个 Key",
 	"Failed to pull from cloud: {0}": "从云端拉取失败：{0}",
+	"Cloud sync is already in progress": "云同步正在进行中，请稍后再试",
 
 	// statusBar.ts / checkUsageCommand.ts - 套餐用量与余额
 	"Plan usage and token usage": "套餐用量与 Token 用量",

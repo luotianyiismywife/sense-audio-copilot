@@ -25,6 +25,11 @@ const GIST_API_BASE = "https://api.github.com/gists";
 const GLOBAL_STATE_GIST_ID = "senseaudio.cloudSyncGistId";
 const GLOBAL_STATE_LAST_SYNC_AT = "senseaudio.lastCloudSyncAt";
 
+// push/pull 互斥：两者都是"读 store → 网络等待 → 写 store"，并发重叠时
+// pull 会用旧 store 快照覆盖 push 的结果（last-writer-wins），push 期间
+// 新增的本地 key 可能被 pull 的合并删掉。模块级互斥标志防止重叠。
+let syncInFlight = false;
+
 /** Gist 中存储的单个 key 条目（仅同步 value/cookie/label，可用性状态为本地数据不同步）。 */
 interface SyncedKeyEntry {
     value: string;
@@ -153,10 +158,23 @@ function buildPayload(keys: ApiKeyEntry[]): SyncPayload {
  * 未登录 GitHub 时弹出登录界面。成功后记录 globalState 同步时间。
  */
 export async function pushToCloud(context: vscode.ExtensionContext): Promise<void> {
+    if (syncInFlight) {
+        vscode.window.showWarningMessage(l10n("Cloud sync is already in progress"));
+        return;
+    }
     const session = await getGitHubSession(true);
     if (!session) {
         return; // 用户取消登录
     }
+    syncInFlight = true;
+    try {
+        await pushToCloudInner(context, session);
+    } finally {
+        syncInFlight = false;
+    }
+}
+
+async function pushToCloudInner(context: vscode.ExtensionContext, session: vscode.AuthenticationSession): Promise<void> {
     const store = await getApiKeyStore(context.secrets);
     if (store.keys.length === 0) {
         vscode.window.showWarningMessage(l10n("No API keys configured"));
@@ -234,6 +252,12 @@ export async function pushToCloud(context: vscode.ExtensionContext): Promise<voi
  * lastCheckedAt）为本地数据，按 key 值保留。
  */
 export async function pullFromCloud(context: vscode.ExtensionContext, silent = false): Promise<boolean> {
+    if (syncInFlight) {
+        if (!silent) {
+            vscode.window.showWarningMessage(l10n("Cloud sync is already in progress"));
+        }
+        return false;
+    }
     const session = await getGitHubSession(false);
     if (!session) {
         if (!silent) {
@@ -241,6 +265,19 @@ export async function pullFromCloud(context: vscode.ExtensionContext, silent = f
         }
         return false;
     }
+    syncInFlight = true;
+    try {
+        return await pullFromCloudInner(context, session, silent);
+    } finally {
+        syncInFlight = false;
+    }
+}
+
+async function pullFromCloudInner(
+    context: vscode.ExtensionContext,
+    session: vscode.AuthenticationSession,
+    silent: boolean,
+): Promise<boolean> {
     try {
         // 定位 Gist：缓存 id → 按描述查找 → 静默模式下无 Gist 视为无更新。
         // 缓存 id 失效（Gist 在其他机器被删除重建）时回退重新查找，避免
