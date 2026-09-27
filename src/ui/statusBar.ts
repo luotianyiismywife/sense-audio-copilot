@@ -129,6 +129,11 @@ export async function refreshPlanUsageNow(): Promise<PlanUsageSnapshot | null> {
     if (!token) {
         return null;
     }
+    // 并发保护：后台刷新在途时不重复发起（避免穿透 in-flight 标志形成并发请求），
+    // 直接返回当前缓存快照。
+    if (usageRefreshInFlight) {
+        return getPlanUsageSnapshot();
+    }
     usageRefreshInFlight = true;
     try {
         const snapshot = await getPlanUsageCached(token, true);

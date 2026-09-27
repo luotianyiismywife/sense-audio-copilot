@@ -695,7 +695,7 @@ test/                                     # 测试脚本（运行前需 npm run 
 ### 4.1f `src/provider/rotation.ts`
 
 #### `runKeyRotationLoop(params): Promise<void>`
-多 API Key 轮换循环。每轮选一个 key，跳过余额不足（cookie 主动预检）或返回轮换错误（401/402/429/503，状态码与文本 patterns 可配置）的 key。全部 key 用尽时列出脱敏 key + 失败原因；若失败均为瞬态（429/503）则按 `senseaudio.transientRetryTimes` 指数退避重试整轮。single 模式 fallback=switch 时仅在余额不足（402/预检）时切换并经 `setActiveKeyByValue` 设为当前（`onFallbackSwitch` 回调触发通知）。参数：`secrets` / `token` / `abortController` / `execute(apiKey, requestHeaders)` / `customHeaders` / `apiMode` / `onFallbackSwitch`。
+多 API Key 轮换循环。每轮选一个 key，跳过余额不足（cookie 主动预检）或返回轮换错误（401/402/429/503，状态码与文本 patterns 可配置）的 key。全部 key 用尽时列出脱敏 key + 失败原因；若失败均为瞬态（429/503）则按 `senseaudio.transientRetryTimes` 指数退避重试整轮。**平台侧瞬态错误（500）强制同 key 重试**：`forceKey` 记住当前 key，下一轮强制复用（rotation 模式游标已前移，不强制会静默换 key，违背"500 不换 key"承诺）。single 模式 fallback=switch 时仅在余额不足（402/预检）时切换并经 `setActiveKeyByValue` 设为当前（`onFallbackSwitch` 回调触发通知）。参数：`secrets` / `token` / `abortController` / `execute(apiKey, requestHeaders)` / `customHeaders` / `apiMode` / `onFallbackSwitch`。
 
 ---
 
@@ -780,7 +780,7 @@ key 轮换失败原因 → 人类可读标签（l10n key）：`balance`/`invalid
 `getPrimaryApiKey` / `pickNextApiKey`（rotation 前移游标 / sticky 钉住游标）/ `shouldSingleKeyFallbackSwitch` / `setActiveKeyByValue`。
 
 #### `keys/health.ts`
-`getTransientExhaustedInfo` / `isApiKeyEligible` / `hasTransientExhaustedKey` / `isKeyRotationError` / `isTransientRetryError` / `isTransientExhaustedReason` / `getKeyRotationReason` / `getKeyUnavailableReason` / `markApiKeyExhausted` / `markApiKeyAvailable` / `updateKeyAvailability` / `resetExhaustedKeys` / `getKeyDisplayStatus`。
+`getTransientExhaustedInfo` / `isApiKeyEligible` / `hasTransientExhaustedKey` / `isKeyRotationError` / `isTransientRetryError` / `isTransientExhaustedReason` / `getKeyRotationReason`（**状态码优先**，文本仅在对应状态码命中时参与判定，避免 429/503 响应体偶然包含"余额不足"时误分类为 balance 并持久化禁用 key；状态码匹配用 `\b` 边界）/ `getKeyUnavailableReason` / `markApiKeyExhausted` / `markApiKeyAvailable` / `updateKeyAvailability` / `resetExhaustedKeys` / `getKeyDisplayStatus`。
 
 #### `keys/mask.ts`
 `maskApiKey` / `maskCookie` 脱敏。
@@ -795,7 +795,7 @@ key 轮换失败原因 → 人类可读标签（l10n key）：`balance`/`invalid
 `getMinBalanceCny`（余额阈值，仅用于 UI 标记充值余额不足）/ `getBalanceCheckIntervalSec`（账号信息缓存 TTL）/ `toNumber`（金额字符串转 number 防御）。
 
 #### `balance/accountInfo.ts`
-`queryAccountInfo(loginToken)`（`GET platform.senseaudio.cn/api/user/self`，Bearer PASETO token + `x-platform`/`x-product` 必需头）/ `getAccountInfoWithStatus(loginToken, ttlSec, force?)`（带状态返回：`ok`/`unauthorized`/`error`，供状态栏与命令区分 401）/ `getAccountInfoCached(loginToken, ttlSec)`（TTL 缓存，失败返回 undefined）/ `formatExpiryDate(epochSec)`（代金券到期日 → `YYYY-MM-DD` 本地时区）+ `POINTS_PER_CNY`（**1 元 = 1,000,000 积分**，2026-09-27 实测校正）+ `AccountInfo` / `PlanUsageWindow` / `AccountInfoFetchStatus` 类型。
+`queryAccountInfo(loginToken)`（`GET platform.senseaudio.cn/api/user/self`，Bearer PASETO token + `x-platform`/`x-product` 必需头）/ `getAccountInfoWithStatus(loginToken, ttlSec, force?)`（带状态返回：`ok`/`unauthorized`/`error`，供状态栏与命令区分 401）/ `getAccountInfoCached(loginToken, ttlSec)`（TTL 缓存，失败返回 undefined）/ `formatExpiryDate(epochSec)`（代金券到期日 → `YYYY-MM-DD` 本地时区）+ `POINTS_PER_CNY`（**1 元 = 1,000,000 积分**，2026-09-27 实测校正）+ `AccountInfo` / `PlanUsageWindow` / `AccountInfoFetchStatus` 类型。`earliestVoucherExpiry` 仅统计有到期日的代金券（全部永不过期时返回 null 而非 Infinity，与类型声明语义一致）。
 
 #### `balance/planUsage.ts`
 **套餐用量快照模块**（对标上游 opencode-go-copilot 的 `goUsage.ts`）。核心是**严格区分两套计费规则**：周期额度（5h/周）是限流窗口，耗尽后等下一周期恢复、不消耗余额；套餐积分（月度 `credit_30d_limit`）才是订阅额度，耗尽后走超额策略。
@@ -849,10 +849,10 @@ key 轮换失败原因 → 人类可读标签（l10n key）：`balance`/`invalid
 将本地 store 序列化为同步负载（仅 value/cookie/label，可用性状态不同步）。
 
 #### `pushToCloud(context): Promise<void>`
-推送本地 key/cookie/备注 到云端 Gist（`senseaudio.syncPush` 命令）。未登录时弹登录界面；无 key 时警告返回。Gist 定位：缓存 gist id（PATCH 404 回退）→ 按描述查找 → 创建新 Gist（`public: false`）。成功后更新 `globalState` 的 `senseaudio.lastCloudSyncAt` 并弹窗提示。
+推送本地 key/cookie/备注 到云端 Gist（`senseaudio.syncPush` 命令）。未登录时弹登录界面；无 key 时警告返回。Gist 定位：缓存 gist id（PATCH 404 回退）→ 按描述查找 → 创建新 Gist（`public: false`）。**POST 响应解析不出 id 时抛错走 catch 分支**（不更新时间戳、不报成功），避免"假成功"污染 `lastCloudSyncAt`。成功后更新 `globalState` 的 `senseaudio.lastCloudSyncAt` 并弹窗提示。
 
 #### `pullFromCloud(context, silent = false): Promise<boolean>`
-从云端 Gist 拉取 key/cookie/备注 覆盖本地（`senseaudio.syncPull` 命令）。合并策略：云端为源——按 key 值对齐，云端条目覆盖本地 cookie/label，云端有本地无的追加、本地有云端无的删除；可用性状态（available/lastCheckedAt）为本地数据按 key 值保留；activeIndex 按 key 值跟随。无变更时不写 store 仅更新同步时间戳。`silent=true`（启动自动拉取）时：未登录/无 Gist/云端无更新（`updatedAt <= lastSyncAt`）均静默返回 false，拉取成功弹窗提示。
+从云端 Gist 拉取 key/cookie/备注 覆盖本地（`senseaudio.syncPull` 命令）。合并策略：云端为源——按 key 值对齐，云端条目覆盖本地 cookie/label，云端有本地无的追加、本地有云端无的删除；可用性状态（available/lastCheckedAt）为本地数据按 key 值保留；activeIndex 按 key 值跟随。无变更时不写 store 仅更新同步时间戳。**缓存 gist id 失效回退**：缓存 id 拉取失败（404 等，Gist 在其他机器被删除重建）时清缓存回退 `findSyncGist` 重新查找，避免自动拉取从此每次启动静默失败。**时间戳用 GitHub 服务端时间**：`fetchSyncPayload` 优先取 Gist API 的 `updated_at` 覆盖负载内时间戳，消除客户端时钟偏差导致的漏拉。`silent=true`（启动自动拉取）时：未登录/无 Gist/云端无更新（`updatedAt <= lastSyncAt`）均静默返回 false，拉取成功弹窗提示。
 
 #### `autoPullOnStartup(context): void`
 启动自动拉取入口（fire-and-forget，不阻塞激活）。读取 `senseaudio.cloudSyncAutoPull` 配置（默认开启），关闭则直接返回；未登录 GitHub 时静默跳过不弹登录界面。
@@ -1261,7 +1261,7 @@ ask_image 工具定义的 OpenAI 格式（`type: "function"`），包含 `imageI
 调度状态栏自动隐藏（默认空闲 60 秒后隐藏，可被下一次请求取消）。在请求结束（finally）时调用，确保切换其他模型后状态栏不会残留。
 
 #### `refreshPlanUsageNow(): Promise<PlanUsageSnapshot | null>`
-强制立即刷新套餐用量（`senseaudio.checkUsage` 命令与点击状态栏使用）：`getPlanUsageCached(token, true)` 绕过 TTL 强制拉取，完成后重渲染主文本与 tooltip 并返回快照。无登录 token 时返回 null。
+强制立即刷新套餐用量（`senseaudio.checkUsage` 命令与点击状态栏使用）：`getPlanUsageCached(token, true)` 绕过 TTL 强制拉取，完成后重渲染主文本与 tooltip 并返回快照。无登录 token 时返回 null。**并发保护**：后台刷新在途时（`usageRefreshInFlight`）不重复发起，直接返回当前缓存快照（`getPlanUsageSnapshot()`），避免穿透 in-flight 标志形成并发请求。
 
 #### `formatTokenCount(value): string`
 格式化 Token 数为人类可读格式 (K/M/B)。

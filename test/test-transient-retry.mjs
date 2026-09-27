@@ -135,5 +135,36 @@ check("429 / 503 归类为瞬态原因", () => {
     assert.equal(getKeyRotationReason(apiError(503)), "server_error");
 });
 
+// ---------------------------------------------------------------------------
+// 7. 状态码优先：文本不单独触发分类（回归：429/503 响应体偶然含
+//    "余额不足"时不得误分类为 balance 并持久化禁用 key）
+// ---------------------------------------------------------------------------
+console.log("状态码优先（文本不单独触发）");
+
+check("429 + 响应体含'余额不足' → 仍归类为 rate_limited（非 balance）", () => {
+    const err = apiError(429, '{"error":{"message":"余额不足或请求过于频繁"}}');
+    assert.equal(getKeyRotationReason(err), "rate_limited");
+});
+
+check("503 + 响应体含'余额不足' → 仍归类为 server_error（非 balance）", () => {
+    const err = apiError(503, "服务端繁忙，账户余额不足");
+    assert.equal(getKeyRotationReason(err), "server_error");
+});
+
+check("402 + 响应体含'余额不足' → 归类为 balance", () => {
+    const err = apiError(402, '{"error":{"message":"余额不足"}}');
+    assert.equal(getKeyRotationReason(err), "balance");
+});
+
+check("402 状态码边界：status 4020 不误匹配 status 402", () => {
+    const err = new Error("API error: status 4020 some error");
+    assert.notEqual(getKeyRotationReason(err), "balance");
+});
+
+check("401 + 响应体含'余额不足' → 仍归类为 invalid（非 balance）", () => {
+    const err = apiError(401, "无效 Key，余额不足");
+    assert.equal(getKeyRotationReason(err), "invalid");
+});
+
 Module._load = originalLoad;
 console.log(`\ntransient retry: ${passed} checks passed`);

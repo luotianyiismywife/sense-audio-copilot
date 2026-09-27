@@ -98,8 +98,9 @@ export function isTransientRetryError(err: unknown): boolean {
 
 /**
  * 从轮换错误中提取失效原因。
- * 基于状态码与错误文本（比 patterns 匹配更精确）：
- * - 402 / INSUFFICIENT_BALANCE / "余额不足" → "balance"
+ * 状态码优先（文本仅在对应状态码命中时参与判定，避免 429/503 响应体
+ * 偶然包含"余额不足"时误分类为 balance 并持久化禁用 key）：
+ * - 402 → "balance"
  * - 401 → "invalid"
  * - 429 / RATE_LIMITED → "rate_limited"
  * - 503 → "server_error"
@@ -108,16 +109,20 @@ export function isTransientRetryError(err: unknown): boolean {
  */
 export function getKeyRotationReason(err: unknown): string {
     const message = (err instanceof Error ? err.message : String(err)).toLowerCase();
-    if (message.includes("[402]") || message.includes("status 402") || message.includes("insufficient_balance") || message.includes("余额不足")) {
+    // 状态码优先：文本（"余额不足"等）仅在对应状态码命中时才参与判定，
+    // 避免 429/503 响应体偶然包含"余额不足"时把瞬态错误误分类为 balance
+    // （持久化 available=false，key 被禁用直到手动重置）。
+    if (message.includes("[402]") || /\bstatus 402\b/.test(message)) {
+        // 402 状态码命中即判定余额不足（文本仅作辅助确认，不再单独触发）
         return "balance";
     }
-    if (message.includes("[401]") || message.includes("status 401")) {
+    if (message.includes("[401]") || /\bstatus 401\b/.test(message)) {
         return "invalid";
     }
-    if (message.includes("[429]") || message.includes("status 429") || message.includes("rate_limited")) {
+    if (message.includes("[429]") || /\bstatus 429\b/.test(message) || message.includes("rate_limited")) {
         return "rate_limited";
     }
-    if (message.includes("[503]") || message.includes("status 503")) {
+    if (message.includes("[503]") || /\bstatus 503\b/.test(message)) {
         return "server_error";
     }
     // 封号：400 + code=billing / "计费账户已被冻结"（确定性失败，持久化不可用）

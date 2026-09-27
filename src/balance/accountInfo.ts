@@ -159,12 +159,17 @@ export async function queryAccountInfo(loginToken: string): Promise<AccountInfo>
         const now = Date.now() / 1000;
         const validVouchers = vouchers.filter((v) => v.available > 0 && (v.expireAt === null || v.expireAt > now));
         const voucherAvailablePoints = validVouchers.reduce((s, v) => s + v.available, 0);
+        // 仅统计有到期日的代金券：全部永不过期时返回 null（而非 Infinity，
+        // 与类型声明 number | null 语义一致，不依赖消费者 Number.isFinite 兜底）
+        const expiries = validVouchers
+            .map((v) => v.expireAt)
+            .filter((e): e is number => e !== null);
         return {
             balance: toNumber(ai.balance ?? body.balance),
             vouchers,
             voucherAvailablePoints,
             voucherAvailableCny: voucherAvailablePoints / POINTS_PER_CNY,
-            earliestVoucherExpiry: validVouchers.length ? Math.min(...validVouchers.map((v) => v.expireAt ?? Infinity)) : null,
+            earliestVoucherExpiry: expiries.length ? Math.min(...expiries) : null,
             enableExtraUsage: ai.enable_extra_usage ?? true,
             status: typeof ai.status === "string" ? ai.status : "UNKNOWN",
             usageInfos: (body.usage_infos ?? []).map((u) => ({

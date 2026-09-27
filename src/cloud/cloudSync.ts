@@ -105,7 +105,10 @@ async function fetchSyncPayload(
     gistId: string,
 ): Promise<SyncPayload | undefined> {
     const resp = await gistFetch(session, `${GIST_API_BASE}/${gistId}`);
-    const gist = (await resp.json()) as { files?: Record<string, { content?: string } | null> };
+    const gist = (await resp.json()) as {
+        updated_at?: string;
+        files?: Record<string, { content?: string } | null>;
+    };
     const content = gist.files?.[GIST_FILE_NAME]?.content;
     if (!content) {
         return undefined;
@@ -113,6 +116,10 @@ async function fetchSyncPayload(
     try {
         const parsed = JSON.parse(content) as SyncPayload;
         if (parsed && parsed.version === 1 && Array.isArray(parsed.keys)) {
+            // 优先使用 GitHub 服务端时间戳（消除客户端时钟偏差导致的漏拉）
+            if (gist.updated_at) {
+                parsed.updatedAt = gist.updated_at;
+            }
             return parsed;
         }
     } catch (err) {
@@ -197,6 +204,11 @@ export async function pushToCloud(context: vscode.ExtensionContext): Promise<voi
                         });
                         const created = (await resp.json()) as { id?: string };
                         gistId = created.id;
+                        if (!gistId) {
+                            // POST 响应解析不出 id：什么都没推送，抛错走 catch
+                            // 分支（不更新时间戳、不报成功），避免"假成功"。
+                            throw new Error("Gist creation response missing id");
+                        }
                     }
                 }
                 if (gistId) {
@@ -230,9 +242,21 @@ export async function pullFromCloud(context: vscode.ExtensionContext, silent = f
         return false;
     }
     try {
-        // 定位 Gist：缓存 id → 按描述查找 → 静默模式下无 Gist 视为无更新
+        // 定位 Gist：缓存 id → 按描述查找 → 静默模式下无 Gist 视为无更新。
+        // 缓存 id 失效（Gist 在其他机器被删除重建）时回退重新查找，避免
+        // 自动拉取从此每次启动都静默失败。
         let gistId = context.globalState.get<string>(GLOBAL_STATE_GIST_ID);
-        if (!gistId) {
+        let payload: SyncPayload | undefined;
+        if (gistId) {
+            try {
+                payload = await fetchSyncPayload(session, gistId);
+            } catch (err) {
+                // 缓存的 gist 已不存在（404 等）→ 清缓存回退查找
+                logger.warn("cloudSync.pull.cachedGistFailed", { gistId, error: String(err) });
+                gistId = undefined;
+            }
+        }
+        if (!payload) {
             const found = await findSyncGist(session);
             if (!found) {
                 if (!silent) {
@@ -242,8 +266,8 @@ export async function pullFromCloud(context: vscode.ExtensionContext, silent = f
             }
             gistId = found.id;
             await context.globalState.update(GLOBAL_STATE_GIST_ID, gistId);
+            payload = await fetchSyncPayload(session, gistId);
         }
-        const payload = await fetchSyncPayload(session, gistId);
         if (!payload) {
             if (!silent) {
                 vscode.window.showWarningMessage(l10n("Cloud sync data is empty or corrupted"));

@@ -63,6 +63,11 @@ export async function runKeyRotationLoop(params: RotationLoopParams): Promise<vo
     const singleFallback = getSingleKeyFallback();
     let currentEntry: ApiKeyEntry | undefined;
     let usedFallbackKey = false; // single mode performed a balance-triggered switch
+    // Platform-side transient error (e.g. 500) retry: force re-use of the
+    // SAME key on the next round. Without this, rotation mode's cursor has
+    // already advanced and pickNextApiKey would silently switch to the next
+    // key — contradicting "500 is a platform problem, do not rotate keys".
+    let forceKey: ApiKeyEntry | undefined;
     // Track per-key failure reasons so the "all keys exhausted" error can
     // show which key failed and why (masked), and distinguish transient
     // failures (429/503 — retry later) from permanent ones (402/401 — check).
@@ -101,8 +106,10 @@ export async function runKeyRotationLoop(params: RotationLoopParams): Promise<vo
             throw new Error(l10nFormat("All API keys are unavailable ({0}). Use the Manage API Keys command to check availability.", detail));
         }
 
-        // 1. Pick the next candidate key
-        currentEntry = await pickNextApiKey(secrets, apiKeyMode);
+        // 1. Pick the next candidate key (forced re-use after a platform-side
+        // transient error — the key itself is fine, do not rotate)
+        currentEntry = forceKey ?? (await pickNextApiKey(secrets, apiKeyMode));
+        forceKey = undefined;
         if (!currentEntry) {
             // single mode + fallback=switch → switch ONLY when the current
             // key is balance-exhausted (402 / balance pre-check failed this
@@ -213,12 +220,15 @@ export async function runKeyRotationLoop(params: RotationLoopParams): Promise<vo
                 if (await tryTransientRetryRound(secrets, transientRetryCount, maxTransientRetries)) {
                     transientRetryCount++;
                     failedKeys.clear();
+                    // Force the SAME key on the next round: 500 is a platform
+                    // problem, not a key problem — do not rotate keys.
+                    forceKey = currentEntry;
                     logger.warn("key.transientRetrySameKey", {
                         key: maskApiKey(currentEntry.value),
                         attempt: transientRetryCount,
                         error: err instanceof Error ? err.message : String(err),
                     });
-                    continue; // retry the whole round (same key will be re-picked)
+                    continue; // retry the whole round with the same key
                 }
                 logger.warn("key.transientRetryExhausted", {
                     key: maskApiKey(currentEntry.value),
