@@ -451,8 +451,9 @@ generateCommitMsg(secrets, scm?)
 src/
 ├── extension.ts                          # 扩展入口（仅编排：初始化 + 注册 Provider + 委托命令注册 + 启动任务）
 ├── api/                                  # 协议适配层
-│   ├── commonApi.ts                      # API 抽象基类（图片存储、工具调用拦截、thinking 缓冲）
+│   ├── commonApi.ts                      # API 抽象基类（图片存储、工具调用拦截、thinking 缓冲、共享辅助）
 │   ├── sse.ts                            # 共享 SSE 流解析（iterateSseEvents / consumeSseStream）
+│   ├── httpClient.ts                     # 共享 HTTP 请求样板（postJson，三协议 createMessage 共用）
 │   ├── openai/
 │   │   ├── openaiApi.ts                  # OpenAI 兼容 API 实现
 │   │   └── openaiTypes.ts                # OpenAI 类型定义
@@ -492,7 +493,9 @@ src/
 │   └── provideModel.ts                   # 模型信息提供函数（含自动发现）
 ├── commands/                             # 命令与 QuickPick UI
 │   ├── registerCommands.ts               # 全部命令注册 + 配置变更监听
-│   ├── apiKeyManagerUi.ts                # manageApiKeys QuickPick 管理 + 账号余额展示辅助
+│   ├── apiKeyManagerUi.ts                # manageApiKeys 主入口（渲染菜单 + 分发动作）
+│   ├── apiKeyDisplay.ts                  # key 展示辅助（余额格式化 / 详情行 / QuickPick 项，三界面共用）
+│   ├── apiKeyFlows.ts                    # key 管理交互流程（增删改/导入/检测/cookie）
 │   ├── checkUsageCommand.ts              # 套餐用量查询命令（senseaudio.checkUsage）
 │   ├── visionProxyCommand.ts             # 视觉代理模型选择
 │   └── modelPresetCommand.ts             # 模型温度预设选择
@@ -534,6 +537,7 @@ resources/
 
 scripts/
 ├── build/                                # 构建相关
+│   ├── clean.mjs                         # 清理 out/（compile 前置，防止陈旧产物进 VSIX）
 │   ├── build-info.mjs                    # 编译元信息生成（out/build-info.json + .copilot/build-log.md，compile 后自动运行）
 │   ├── package-vsix.mjs                  # VSIX 打包（npm run build），输出名固定 <name>-<version>.vsix
 │   └── copy-tokenizer.js                 # 拷贝/下载 tokenizer 资源（postinstall）
@@ -542,8 +546,21 @@ scripts/
     ├── check-settings.mjs                # 设置项一致性核对（声明 vs 使用，挂到 compile）
     └── audit-all.mjs                     # 完整审计（npm run audit，7 项检查）
 
+.vscode/                                  # 调试配置（F5 启动扩展宿主）
+├── launch.json                           # Run Extension（preLaunchTask: npm: compile）
+└── tasks.json                            # compile / watch / test:offline 任务
+
+docs/
+├── multi-api-key-design.md               # 多 Key 轮换与失效切换（当前实现）
+├── plan-usage-design.md                  # 套餐用量与余额显示设计
+├── responses-api-issues.md               # Responses 协议已知问题
+└── archive/                              # 历史设计归档
+    └── multi-api-key-design-v1.9-cookie-precheck.md  # 含已废弃 cookie 预检架构的旧版设计
+
 test/                                     # 测试脚本（运行前需 npm run compile）
 ├── api-tests.mjs                         # 三协议 API 完整测试（OpenAI/Anthropic/Responses，第 9b 项含生产 400 回归用例）
+├── test-plan-usage.mjs                   # 套餐用量快照测试（29 项断言）
+├── test-transient-retry.mjs              # 瞬态错误分类测试（18 项断言，含 500 不换 key 回归）
 ├── test-vision-history.mjs               # 跨轮视觉历史编解码 + 双 API 转换器闭环测试
 ├── test-anthropic-tool-result-merge.mjs  # Anthropic 连续工具结果合并测试（issue #87 场景）
 ├── test-apply-token.mjs                  # 令牌应用测试
@@ -563,13 +580,14 @@ test/                                     # 测试脚本（运行前需 npm run 
 | 文件 | 行数 | 职责 |
 |------|------|------|
 | `extension.ts` | ~42 | 扩展激活/停用。**仅编排**：初始化日志/分词器/状态栏、注册 Provider、委托 `registerCommands()`、触发启动任务（模型同步 / 云同步自动拉取） |
-| `api/commonApi.ts` | ~445 | `CommonApi<TMessage,TRequestBody>` 抽象基类（图片存储、工具调用拦截、thinking 缓冲、流式状态重置）；新增 `localImages` / `originalApiMessages` / `systemContent` / `capturedReasoningContent` 公共访问器供视觉代理使用 |
+| `api/commonApi.ts` | ~560 | `CommonApi<TMessage,TRequestBody>` 抽象基类（图片存储、工具调用拦截、thinking 缓冲、流式状态重置）；公共访问器 `localImages` / `originalApiMessages` / `systemContent` / `capturedReasoningContent` 供视觉代理使用；**三协议共享辅助**（2026-09-28 去重）：`collectLocalImages()`（图片收集）、`applyTemperature()`、`mergeExtraParams()`、`runSseStream()`（SSE 消费骨架） |
 | `api/sse.ts` | ~148 | **共享 SSE 流解析**（2026-09-27 新增）：`iterateSseEvents()` 异步生成器 + `consumeSseStream()` 回调式消费，统一 reader 生命周期、`data:` 前缀解析、`[DONE]` 哨兵、取消回调注册与 finally 清理。三协议适配器共用，消除 5 处重复 |
-| `api/openai/openaiApi.ts` | ~571 | OpenAI 格式 API 实现 (消息转换/请求构建/流式处理/图片代理/跨轮视觉历史重建)；`captureUsage()` 独立处理用量（OpenAI + DeepSeek 两种格式） |
+| `api/httpClient.ts` | ~39 | **共享 HTTP 请求样板**（2026-09-28 新增）：`postJson()` 统一三协议 `createMessage` 的 fetch + 非 2xx 抛错（错误消息含状态码/状态文本/响应体/URL） |
+| `api/openai/openaiApi.ts` | ~505 | OpenAI 格式 API 实现 (消息转换/请求构建/流式处理/图片代理/跨轮视觉历史重建)；`captureUsage()` 独立处理用量（OpenAI + DeepSeek 两种格式） |
 | `api/openai/openaiTypes.ts` | ~66 | OpenAI 类型定义 |
-| `api/anthropic/anthropicApi.ts` | ~549 | Anthropic 格式 API 实现 (消息转换/请求构建/流式处理/图片代理/跨轮视觉历史重建/**连续工具结果合并**) |
+| `api/anthropic/anthropicApi.ts` | ~487 | Anthropic 格式 API 实现 (消息转换/请求构建/流式处理/图片代理/跨轮视觉历史重建/**连续工具结果合并**) |
 | `api/anthropic/anthropicTypes.ts` | ~119 | Anthropic 类型定义 |
-| `api/responses/responsesApi.ts` | ~586 | Responses API 格式实现 (消息转换/请求构建/流式处理/图片代理/文本化工具回填) |
+| `api/responses/responsesApi.ts` | ~539 | Responses API 格式实现 (消息转换/请求构建/流式处理/图片代理/文本化工具回填) |
 | `api/responses/responsesTypes.ts` | ~117 | Responses 类型定义 |
 | `provider/provider.ts` | ~341 | `SenseAudioChatModelProvider`：VS Code 接口实现（`provideLanguageModelChatInformation` / `provideTokenCount` / `provideLanguageModelChatResponse`）+ 请求编排（模型配置解析、延迟、超时、取消、错误分类、状态栏生命周期）。具体逻辑委托给同目录模块 |
 | `provider/requestOptions.ts` | ~106 | 请求参数决策：`applyReasoningEffort()`（thinking 模式）、`applyTemperature()`（预设/自定义/fixedTopP）、`resolveApiMode()`（auto 模式能力探测） |
@@ -596,7 +614,9 @@ test/                                     # 测试脚本（运行前需 npm run 
 | `models/modelSync.ts` | ~83 | 启动模型同步：每日最多一次检查 API 新模型（`globalState` 记录日期），同步结果以一行日志输出到「SenseAudio」Output 通道（`models.sync` 标签），**不写文件**（v1.7.0 移除工作区 `.copilot/model-sync-log.md`，见 issue #1），无 Key/API 不可用记录失败且不标记已同步 |
 | `models/provideModel.ts` | ~280 | 模型信息提供函数（含自动发现）：**先读 `enableAutoModelDiscovery` 开关**（关闭则直接用内置列表）、过滤内置模型、从 API 和 models.dev 自动发现新增模型、按 apiMode 过滤 |
 | `commands/registerCommands.ts` | ~130 | 注册全部 12 条命令（setApiKey / manageApiKeys / setVisionProxyModel / getApiKey / openSettings / generateGitCommitMessage / abortGitCommitMessage / setModelPreset / syncPush / syncPull / checkUsage）+ `onDidChangeConfiguration` 监听（apiMode / enableAutoModelDiscovery 变化时刷新模型列表） |
-| `commands/apiKeyManagerUi.ts` | ~649 | `showApiKeyManager()` QuickPick 管理（增删/批量导入/设为当前（仅 single 模式）/绑定 cookie/重置失效/检测可用性/编辑 key/**账号余额显示**）+ 展示辅助 `formatBalanceDetailText` / `fetchAccountInfo` |
+| `commands/apiKeyManagerUi.ts` | ~171 | `showApiKeyManager()` 主入口：**仅渲染主菜单 + 分发动作**（增删/批量导入/设为当前（仅 single 模式）/绑定 cookie/重置失效/检测可用性/编辑 key）；具体流程委托 `apiKeyFlows.ts`，展示委托 `apiKeyDisplay.ts` |
+| `commands/apiKeyDisplay.ts` | ~138 | **key 展示辅助**（2026-09-28 新增，纯函数）：`formatBalanceDetailText`（余额格式化）、`fetchAccountInfo`（TTL 缓存查询）、`buildKeyDetailLine`（单 key 详情行）、`buildKeyQuickPickItems`（key 列表 QuickPick 项）。主界面 / key 选择界面 / 检测二级界面共用，展示逻辑只写一处 |
+| `commands/apiKeyFlows.ts` | ~432 | **key 管理交互流程**（2026-09-28 新增）：`KeyManagerContext` 接口 + `queryBalanceFlow` / `addKeyFlow` / `batchImportFlow` / `pickKey` / `checkAvailabilityFlow` / `checkAllAvailabilityFlow` / `showCheckMenu` / `bindCookieFlow` / `editKeyFlow` |
 | `commands/checkUsageCommand.ts` | ~60 | `checkUsageCommand()`：强制刷新套餐用量（绕过 TTL）并弹窗展示三窗口使用率 + 余额；区分未配置 token / 401 失效 / 一般失败三种错误 |
 | `commands/visionProxyCommand.ts` | ~68 | `setVisionProxyModelCommand()`：从 `/v1/models` 动态加载 `supports_vision=true` 模型供 QuickPick 选择，API 不可用时回退手填 |
 | `commands/modelPresetCommand.ts` | ~108 | `setModelPresetCommand()`：命名预设（Precise/Balanced/Creative）与自定义 temperature/top_p 输入 |
@@ -612,11 +632,12 @@ test/                                     # 测试脚本（运行前需 npm run 
 | `tokenizer/tokenizerManager.ts` | ~97 | o200k_base 分词器管理 (含 LRU 缓存) |
 | `tokenizer/provideToken.ts` | ~89 | Token 用量计算 |
 | `tokenizer/imageUtils.ts` | ~113 | 图片尺寸解析 (PNG/GIF/JPEG/WebP) |
-| `vision/types.ts` | ~80 | Vision proxy 类型定义（`StoredImage`, `InterceptedToolCall`, `ASK_IMAGE_TOOL_DEF`, `ASK_IMAGE_TOOL_NAME`, `ASK_WITH_MULTI_IMAGE_TOOL_DEF`, `ASK_WITH_MULTI_IMAGE_TOOL_NAME`, `DEFAULT_VISION_PROMPT`） |
+| `vision/types.ts` | ~100 | Vision proxy 类型定义（`StoredImage`, `InterceptedToolCall`, `ASK_IMAGE_TOOL_DEF`, `ASK_IMAGE_TOOL_NAME`, `ASK_WITH_MULTI_IMAGE_TOOL_DEF`, `ASK_WITH_MULTI_IMAGE_TOOL_NAME`, `DEFAULT_VISION_PROMPT`）+ **非视觉图片引用工厂**（2026-09-28 新增）：`buildUserImageReference(index)` / `buildToolImageReference(index)`（三协议 convertMessages 共用，消除 6 处重复字符串） |
 | `vision/historyCodec.ts` | ~136 | 跨轮视觉历史编解码（源自上游 opencode-go-copilot v1.9.2）：`VISION_TOOL_HISTORY_MIME`、`VisionToolHistoryEntry`、`serializeVisionToolHistory`、`deserializeVisionToolHistory`、`toOpenAIVisionToolMessages`、`toAnthropicVisionToolMessages` |
 | `vision/historyPart.ts` | ~18 | 跨轮视觉历史 DataPart 创建/解析（源自上游）：`createVisionToolHistoryPart`、`parseVisionToolHistoryPart` |
 | `vision/imageProxy.ts` | ~150 | 图片代理核心：调用视觉模型描述图片（`callVisionModel`/`callVisionModelMulti`），**仅在本供应商（senseaudio）内查找视觉模型**（`findVisionModel` 多级回退，修复 issue #3），支持 thinking 模式配置和文本流式转发 |
 | `typings/vscode.proposed.*.d.ts` | — | VS Code proposed API 类型声明（仅编译期类型补全，不影响运行时） |
+| `scripts/build/clean.mjs` | ~17 | **清理 `out/`**（2026-09-28 新增）：`npm run compile` 前置步骤。`tsc` 不清理 `outDir`，源文件删除/移动后旧 `.js` 会残留并被 `vsce package` 打进 VSIX（曾出现已删除的 `legacyCookieApi.js` 等 24 个陈旧产物随包发布） |
 | `scripts/build/build-info.mjs` | ~90 | 编译元信息生成：`npm run compile` 后自动运行，写入 `out/build-info.json`（版本号 + 编译时间，标注 IANA 时区与 UTC 偏移）并追加 `.copilot/build-log.md`（编译日志） |
 | `scripts/build/package-vsix.mjs` | ~20 | VSIX 打包脚本（`npm run build`）：从 `package.json` 读取版本号，输出名固定为 `senseaudio-copilot-<version>.vsix`（如 `senseaudio-copilot-1.10.0.vsix`，发布命名规范，不用 vsce 默认的 `extension.vsix`） |
 | `scripts/build/copy-tokenizer.js` | ~55 | postinstall：确保 `assets/model/o200k_base.tiktoken` 存在，缺失时从 OpenAI 公共存储下载 |
@@ -653,15 +674,57 @@ test/                                     # 测试脚本（运行前需 npm run 
 ### 4.1b `src/commands/apiKeyManagerUi.ts`
 
 #### `showApiKeyManager(context: vscode.ExtensionContext): Promise<void>`
-多 Key 管理 QuickPick 主流程（`senseaudio.manageApiKeys` 命令）。循环渲染 key 列表（脱敏显示 + 可用性/当前使用/cookie 状态/**账号余额**标记；sticky 模式下另显示 `$(pinned) 当前固定` 只读标记，指向 `getRotationCursorIndex()` 游标所指 key），支持动作：添加 Key（依次输入 key/cookie/备注）、**批量导入**（`batchImportFlow` 表单式三元组）、删除 Key（二次确认）、**设为当前使用（仅 single 模式渲染，轮询模式隐藏；★ Current 标记同理）**、重置失效状态（清冷却 + available=false → null）、**检测可用性（`showCheckMenu` 二级界面：列出全部 key 状态 + "检测所有"选项）**、绑定或更新 Cookie、清除 Cookie、**编辑 Key（`editKeyFlow` 三字段 value/cookie/label）**。内部局部函数：`batchImportFlow`（逐条输入 key/cookie/备注三元组，Finish 时调用 `addApiKeys`，已存在 key 更新 cookie）、`showCheckMenu`（检测二级界面，单测/全测）、`checkAllAvailabilityFlow`（withProgress 遍历 `testKeyAvailability` 并更新状态）、`bindCookieFlow`、`editKeyFlow`、`checkAvailabilityFlow`、`pickKey`。
+多 Key 管理 QuickPick 主流程（`senseaudio.manageApiKeys` 命令）。**仅渲染主菜单 + 分发动作**：构造 `KeyManagerContext`（`secrets` + `getLoginToken`/`setLoginToken`，登录 token 存 `globalState` 的 `senseaudio.loginToken`），循环渲染 key 列表（经 `buildKeyQuickPickItems`，脱敏显示 + 可用性/当前使用/固定使用/cookie 状态/账号余额）与动作项，直到用户取消。动作分发到 `apiKeyFlows.ts`：添加 Key（`addKeyFlow`）、批量导入（`batchImportFlow`）、删除 Key（`pickKey` + 二次确认 + `removeApiKey`）、设为当前使用（仅 single 模式渲染；`pickKey` + `setActiveKey`）、编辑 Key（`pickKey` + `editKeyFlow`）、重置失效状态（`resetExhaustedKeys(secrets, true)`）、检测可用性（`showCheckMenu`）、绑定/更新 Cookie（`pickKey` + `bindCookieFlow`）、清除 Cookie（`pickKey` + `setKeyCookie(secrets, index, undefined)`）。
 
-**账号余额显示**：主界面 `render()`、检测二级界面 `showCheckMenu()` 与 key 选择界面 `pickKey()`（删除/设当前/编辑/绑定/清除 cookie 共用）均通过 `fetchAccountInfo(getLoginToken)`（TTL 缓存）查询账号余额并展示——现金余额显示 `$(coin)/$(error) 充值 ¥X.XX`（> `minBalanceCny` 为 coin、≤ 为 error），代金券可用显示 `$(gift) 赠送 ¥Y.YY`（> 0 时显示，附 `（至 YYYY-MM-DD）` 最早到期日，经 `formatExpiryDate` 本地时区格式化）；查询失败显示 `$(warning) 余额未知`。**余额按账号粒度**（所有 key 共享同一份，不再按 cookie 逐 key 查询）。格式化逻辑集中在 `formatBalanceDetailText`（模块级函数）。**类型守卫**：`toFixed(2)` 前金额统一经 `toNumber` 强制转 number（API 曾以字符串返回金额导致 toFixed 崩溃）。`checkAvailabilityFlow` 的余额不足提示用 `getMinBalanceCny()` 显示实际阈值。
+---
+
+### 4.1b-2 `src/commands/apiKeyDisplay.ts`（2026-09-28 新增）
 
 #### `formatBalanceDetailText(info, minBalance): string`
-格式化账号余额为显示文本：现金余额（充值）+ 代金券可用（赠送，含最早到期日）。现金余额 ≤ `minBalanceCny` 时以 `$(error)` 图标标记。
+格式化账号余额为显示文本：现金余额（充值）+ 代金券可用（赠送，含最早到期日）。图标依据**合计可用余额**（现金 + 代金券）——> `minBalanceCny` 为 `$(coin)`、≤ 为 `$(error)`。
 
 #### `fetchAccountInfo(getLoginToken): Promise<AccountInfo | undefined>`
 查询账号余额（TTL 缓存）。数据源为登录 PASETO token 查 `platform.senseaudio.cn/api/user/self`（`getAccountInfoCached`）。余额按**账号**粒度，所有 key 共享同一份。无 token 或查询失败 → undefined（UI 显示"余额未知"）。
+
+#### `buildKeyDetailLine(entry, balanceText, options?): string`
+构建单个 key 的详情行（与主界面 `render()` 一致）：可用性状态（`$(check)` 可用 / `$(error)` 不可用 / `$(clock)` 冷却（含剩余秒数）/ `$(question)` 未检测）+ 账号余额 + `$(star)` 当前使用（仅 single 模式）+ `$(pinned)` 固定使用（仅 sticky 模式）+ cookie 绑定状态。主界面、key 选择界面、检测二级界面共用，展示逻辑只写一处。
+
+#### `buildKeyQuickPickItems(store, getLoginToken, action): Promise<QuickPickItem[]>`
+构建 key 列表的 QuickPick 项（label + 详情行）。统一处理：账号余额查询（TTL 缓存）、模式判定（single/sticky 的当前/固定标记）、逐 key 详情行（`buildKeyDetailLine`）。主界面 `render()`、key 选择界面 `pickKey()`、检测二级界面 `showCheckMenu()` 共用。
+
+---
+
+### 4.1b-3 `src/commands/apiKeyFlows.ts`（2026-09-28 新增）
+
+#### `interface KeyManagerContext`
+`{ secrets: vscode.SecretStorage; getLoginToken: () => string | undefined; setLoginToken: (token) => Promise<void> }` — 流程上下文，避免闭包耦合。
+
+#### `queryBalanceFlow(ctx): Promise<void>`
+查询余额/套餐用量流程（登录 token）。无 token 时提示输入（F12 → Local Storage → `user.state.token`）；查询失败（token 失效/网络）时提示重新输入并清空已存 token。
+
+#### `addKeyFlow(ctx): Promise<boolean>`
+添加单个 key 流程（依次输入 key → cookie → label 三元组）。重复值提示已存在并返回 false。
+
+#### `batchImportFlow(ctx): Promise<void>`
+批量导入流程：表单式逐条输入 (key/cookie/label) 三元组，Finish 时 `addApiKeys` 一次性写入；已存在的 key 自动更新 cookie（不重复添加）。
+
+#### `pickKey(ctx, title): Promise<{ index, entry } | undefined>`
+选择一个 key（删除/设为当前/编辑/绑定/清除 cookie 共用）。复用主界面同款 QuickPick 项（`buildKeyQuickPickItems`），让用户在删除/编辑前能区分各个 key。
+
+#### `checkAvailabilityFlow(ctx, index): Promise<void>`
+检测单个 key 的可用性（`testKeyAvailability` 最小真实聊天请求），并更新其可用状态。402 → 提示"余额不足（≤ 阈值）"；401 → "Key 已失效"；无法确定 → "请稍后重试"。
+
+#### `checkAllAvailabilityFlow(ctx): Promise<void>`
+检测全部 key 的可用性（带进度条遍历），汇总"可用/不可用/未知"。
+
+#### `showCheckMenu(ctx): Promise<void>`
+检测可用性二级界面：列出全部 key 状态（`buildKeyQuickPickItems`）+ "检测所有" + "查询余额" + "返回"。
+
+#### `bindCookieFlow(ctx, index): Promise<void>`
+绑定/更新 cookie 流程（空输入 = 清除）。
+
+#### `editKeyFlow(ctx, index): Promise<void>`
+编辑 key 流程（value / cookie / label 三字段，value 冲突校验）。
 
 ---
 
@@ -1021,8 +1084,27 @@ API 实现的抽象基类。
 #### `protected processTextContent(content, progress): { emittedAny: boolean }`
 处理普通文本内容，发射到进度报告器。
 
+#### `protected collectLocalImages(messages): void`（2026-09-28 新增）
+收集消息中的图片并存入实例局部数组（仅非视觉模型需要）。扫描范围：① 直接的图片 DataPart；② 工具结果内嵌的图片 DataPart；③ 文本 part 中的 base64 data URI 图片。命中后设置 `_localImages` 与 `_hasImages`，供 `prepareRequestBody` 注入 ask_image 工具。三协议 `convertMessages` 共用（原先各自重复约 40 行）。
+
+#### `protected applyTemperature(rb, um): void`（2026-09-28 新增）
+注入 temperature / top_p（模型声明 `supportsTemperature === false` 时跳过）。三协议 `prepareRequestBody` 共用。Anthropic 在 thinking 强制 enabled 时需整体跳过温度控制，由调用方自行判断后决定是否调用本方法。
+
+#### `protected mergeExtraParams(rb, um): void`（2026-09-28 新增）
+合并模型 `extra` 参数到请求体（`undefined` 值跳过）。三协议 `prepareRequestBody` 共用。
+
+#### `protected runSseStream(responseBody, progress, token, tag, onEvent, options?): Promise<void>`（2026-09-28 新增）
+统一的 SSE 流消费骨架（三协议 `processStreamingResponse` 共用）。负责：重置流状态 → （可选）协议专属清理（`options.onBefore`）→ 逐事件回调 → 结束刷新工具调用（`options.onDone`，缺省为基类 `flushToolCallBuffers`）→ 结束 thinking。reader 生命周期/取消回调/`[DONE]` 由 `sse.ts` 统一处理。
+
 #### `static prepareHeaders(apiKey, apiMode, customHeaders?): Record<string, string>`
 准备 HTTP 请求头。Anthropic 模式使用 `x-api-key`，OpenAI 模式使用 `Bearer` 令牌。User-Agent 使用本项目真实的 `VersionManager.getUserAgent()`（`senseaudio-copilot/<版本> VSCode/<版本>`，2026-09-23 修复：原为上游遗留的伪装官方 SDK 假 UA `ai-sdk/openai-compatible/2.0.41 ... runtime/bun/1.3.11`）。
+
+---
+
+### 4.4b `src/api/httpClient.ts`（2026-09-28 新增）
+
+#### `postJson(url, headers, body, signal, errorPrefix): Promise<Response>`
+发送 JSON POST 请求并校验响应状态（三协议 `createMessage` 共用）。非 2xx 时抛出含状态码、状态文本、响应体与 URL 的错误（`errorPrefix` 区分协议，如 `"API error"` / `"Anthropic API request failed"` / `"Responses API error"`）。返回原始 `Response` 供调用方读取 body / json。
 
 ---
 
@@ -1190,6 +1272,12 @@ ask_image 工具定义的 OpenAI 格式（`type: "function"`），包含 `imageI
 
 #### `const DEFAULT_VISION_PROMPT`
 默认的图片分析提示词（未设置自定义查询时使用）。
+
+#### `buildUserImageReference(imageIndex): string`（2026-09-28 新增）
+非视觉模型收到**用户直接发送的图片**时替换成的文本引用（强指令措辞，引导模型调用 ask_image）。不含前导换行——需要与相邻文本分隔的调用方自行加 `"\n"` 前缀。三协议 `convertMessages` 共用（原先 6 处重复字符串）。
+
+#### `buildToolImageReference(imageIndex): string`（2026-09-28 新增）
+非视觉模型收到**工具结果内嵌图片**时替换成的文本引用。与 `buildUserImageReference` 措辞一致，仅前缀区分来源（tool call）。
 
 ---
 
@@ -1669,9 +1757,9 @@ Anthropic 请求体。包含 `model`, `messages`, `max_tokens`, `system`, `strea
 ### 5.1 编译命令
 
 ```bash
-# TypeScript 编译（tsc + 生成编译元信息 + 设置项一致性核对）
+# TypeScript 编译（清理 out/ + tsc + 生成编译元信息 + 设置项一致性核对）
 npm run compile
-# 等效于: npx tsc -p ./ && node scripts/build/build-info.mjs && node scripts/dev/check-settings.mjs
+# 等效于: node scripts/build/clean.mjs && tsc -p ./ && node scripts/build/build-info.mjs && node scripts/dev/check-settings.mjs
 
 # 完整审计（设置漂移 / 未使用导出 / 未使用 l10n / nls 一致性 / 命令声明 / 文档路径 / 测试路径）
 npm run audit
@@ -1685,13 +1773,21 @@ npx tsc --noEmit
 # 持续监视模式
 npm run watch
 
+# 离线测试（4 个，无需 API Key；先自动 compile）
+npm test
+# 等效于: npm run compile && npm run test:offline
+npm run test:offline
+# 等效于: node test/test-plan-usage.mjs && node test/test-transient-retry.mjs && node test/test-vision-history.mjs && node test/test-anthropic-tool-result-merge.mjs
+
 # 打包 VSIX
 npm run build
 # 等效于: node scripts/build/package-vsix.mjs
 # 输出名固定为 <name>-<version>.vsix（如 senseaudio-copilot-1.10.0.vsix），不使用 vsce 默认的 extension.vsix
 ```
 
-> `npm run compile` 在 `tsc` 编译后自动运行 `scripts/build/build-info.mjs`（生成编译元信息）与 `scripts/dev/check-settings.mjs`（设置项一致性核对，有漂移则编译失败）。详见 6.1b「编译产物元信息铁律」。
+> `npm run compile` 先运行 `scripts/build/clean.mjs` **清空 `out/`**（`tsc` 不清理 `outDir`，源文件删除/移动后旧 `.js` 会残留并被 `vsce package` 打进 VSIX），再 `tsc` 编译，最后自动运行 `scripts/build/build-info.mjs`（生成编译元信息）与 `scripts/dev/check-settings.mjs`（设置项一致性核对，有漂移则编译失败）。详见 6.1b「编译产物元信息铁律」。
+
+> **调试**：`.vscode/launch.json` 提供 `Run Extension`（F5，`preLaunchTask: npm: compile`）与 `Run Extension (no compile)` 两个配置；`.vscode/tasks.json` 提供 `npm: compile` / `npm: watch` / `npm: test:offline` 任务。
 
 ### 5.2 编译配置 (tsconfig.json)
 
@@ -1732,6 +1828,14 @@ npm run build
 > npx tsc --noEmit
 > ```
 > 任何编译错误（包括类型错误）必须在提交前修复。
+
+### 6.1a **编译产物清洁铁律**
+
+> **`npm run compile` 必须先清空 `out/`。**
+>
+> `tsc` 不会清理 `outDir`：源文件被删除/移动后，旧的 `.js` 会残留在 `out/` 并被 `vsce package` 打进 VSIX
+> （2026-09-28 实测：`out/` 残留 24 个陈旧产物，含已删除的 `legacyCookieApi.js`，且已随 `senseaudio-copilot-1.2.0.vsix` 发布）。
+> `scripts/build/clean.mjs` 作为 `compile` 的前置步骤解决此问题。**禁止**手动删除 `out/` 后跳过 `clean` 步骤打包。
 
 ### 6.1b **编译产物元信息铁律**
 

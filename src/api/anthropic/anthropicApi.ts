@@ -18,23 +18,25 @@ import type {
 	AnthropicStreamChunk,
 } from "./anthropicTypes";
 
-import { isImageMimeType, isToolResultPart, convertToolsToOpenAI, mapRole, storeDataUriImages, replaceDataUriImages } from "../../core/utils";
+import { isImageMimeType, isToolResultPart, convertToolsToOpenAI, mapRole, replaceDataUriImages } from "../../core/utils";
 
 import { CommonApi } from "../commonApi";
-import { consumeSseStream, iterateSseEvents } from "../sse";
+import { iterateSseEvents } from "../sse";
 import { logger } from "../../core/logger";
-import type { StoredImage } from "../../vision/types";
-import { ASK_IMAGE_TOOL_DEF, ASK_WITH_MULTI_IMAGE_TOOL_DEF } from "../../vision/types";
+import {
+	ASK_IMAGE_TOOL_DEF,
+	ASK_WITH_MULTI_IMAGE_TOOL_DEF,
+	buildUserImageReference,
+	buildToolImageReference,
+} from "../../vision/types";
 import { parseVisionToolHistoryPart } from "../../vision/historyPart";
 import { toAnthropicVisionToolMessages, type VisionToolHistoryEntry } from "../../vision/historyCodec";
+import { postJson } from "../httpClient";
 
 export class AnthropicApi extends CommonApi<AnthropicMessage, AnthropicRequestBody> {
 	constructor(modelId: string) {
 		super(modelId);
 	}
-
-	/** Whether images were found during convertMessages for ask_image tool. */
-	private _hasImages = false;
 
 	/** Accumulated input tokens from Anthropic message_start for usage reporting. */
 	private _anthropicInputTokens = 0;
@@ -54,44 +56,8 @@ export class AnthropicApi extends CommonApi<AnthropicMessage, AnthropicRequestBo
 		let imageIndex = 0;
 
 		// Collect images to instance-local array if model doesn't support vision
-		const imagesToStore: StoredImage[] = [];
 		if (!modelSupportsVision) {
-			for (const m of messages) {
-				for (const part of m.content ?? []) {
-					if (part instanceof vscode.LanguageModelDataPart && isImageMimeType(part.mimeType)) {
-						imagesToStore.push({
-							data: part.data,
-							mimeType: part.mimeType,
-						});
-					}
-					// Also scan inside tool result content for images
-					// (e.g., when view_image tool returns an image in a previous turn)
-					if (isToolResultPart(part)) {
-						const toolContent = (part as { content?: ReadonlyArray<unknown> }).content;
-						if (toolContent) {
-							for (const inner of toolContent) {
-								if (inner instanceof vscode.LanguageModelDataPart && isImageMimeType(inner.mimeType)) {
-									imagesToStore.push({
-										data: inner.data,
-										mimeType: inner.mimeType,
-									});
-								} else if (inner instanceof vscode.LanguageModelTextPart) {
-									// Scan text for base64 data URI images
-									storeDataUriImages(inner.value, imagesToStore);
-								}
-							}
-						}
-					}
-					// Scan direct text parts for base64 data URI images
-					if (part instanceof vscode.LanguageModelTextPart) {
-						storeDataUriImages(part.value, imagesToStore);
-					}
-				}
-			}
-			if (imagesToStore.length > 0) {
-				this._localImages = imagesToStore;
-				this._hasImages = true;
-			}
+			this.collectLocalImages(messages);
 		}
 
 		// Anthropic protocol requires all tool_result blocks answering one
@@ -159,7 +125,7 @@ export class AnthropicApi extends CommonApi<AnthropicMessage, AnthropicRequestBo
 									toolTexts.push(result.text);
 								}
 							} else if (!modelSupportsVision && inner instanceof vscode.LanguageModelDataPart && isImageMimeType(inner.mimeType)) {
-								toolTexts.push(`\n[Image data from tool call (imageIndex=${imageIndex}). I am a text-only model and CANNOT see images directly. I MUST call the ask_image tool to learn about it.\n\nRecommended strategy:\n1. First call ask_image for a brief description to get an overview of the image.\n2. Then call ask_image again with specific questions about details you need (e.g., colors, text content, UI elements, error messages, or any other visible information).\n]`);
+								toolTexts.push("\n" + buildToolImageReference(imageIndex));
 								imageIndex++;
 							}
 						}
@@ -238,7 +204,7 @@ export class AnthropicApi extends CommonApi<AnthropicMessage, AnthropicRequestBo
 				for (let i = 0; i < imageParts.length; i++) {
 					contentBlocks.push({
 						type: "text",
-						text: `[The user sent an image (imageIndex=${imageIndex}). I am a text-only model and CANNOT see images directly. I MUST call the ask_image tool to learn about it.\n\nRecommended strategy:\n1. First call ask_image for a brief description to get an overview of the image.\n2. Then call ask_image again with specific questions about details you need (e.g., colors, text content, UI elements, error messages, or any other visible information).\n]`,
+						text: buildUserImageReference(imageIndex),
 					});
 					imageIndex++;
 				}
@@ -326,18 +292,7 @@ export class AnthropicApi extends CommonApi<AnthropicMessage, AnthropicRequestBo
 
 		// Add temperature (skipped only while thinking is forced enabled)
 		if (!thinkingForcedEnabled) {
-			if (um?.temperature !== undefined && um.temperature !== null) {
-				if (um.supportsTemperature !== false) {
-					rb.temperature = um.temperature;
-				}
-			}
-
-			// Add top_p if configured
-			if (um?.top_p !== undefined && um.top_p !== null) {
-				if (um.supportsTemperature !== false) {
-					rb.top_p = um.top_p;
-				}
-			}
+			this.applyTemperature(rb as unknown as Record<string, unknown>, um);
 		}
 
 		// Add top_k if configured
@@ -395,14 +350,7 @@ export class AnthropicApi extends CommonApi<AnthropicMessage, AnthropicRequestBo
 		}
 
 		// Process extra configuration parameters
-		if (um?.extra && typeof um.extra === "object") {
-			// Add all extra parameters directly to the request body
-			for (const [key, value] of Object.entries(um.extra)) {
-				if (value !== undefined) {
-					(rb as unknown as Record<string, unknown>)[key] = value;
-				}
-			}
-		}
+		this.mergeExtraParams(rb as unknown as Record<string, unknown>, um);
 
 		return rb;
 	}
@@ -418,18 +366,14 @@ export class AnthropicApi extends CommonApi<AnthropicMessage, AnthropicRequestBo
 		progress: Progress<LanguageModelResponsePart>,
 		token: CancellationToken
 	): Promise<void> {
-		// Reset mutable state to prevent carryover from previous rounds
-		this._resetStreamState();
-
-		await consumeSseStream(responseBody, {
-			tag: "anthropic",
-			modelId: this._modelId,
+		await this.runSseStream(
+			responseBody,
+			progress,
 			token,
-			debugChunks: true,
-			onEvent: (parsed) => this.processAnthropicChunk(parsed as AnthropicStreamChunk, progress),
-			onDone: () => this.flushToolCallBuffers(progress, false),
-			onFinally: () => this.reportEndThinking(progress),
-		});
+			"anthropic",
+			(parsed) => this.processAnthropicChunk(parsed as AnthropicStreamChunk, progress),
+			{ debugChunks: true }
+		);
 	}
 
 	/**
@@ -559,17 +503,7 @@ export class AnthropicApi extends CommonApi<AnthropicMessage, AnthropicRequestBo
 			? `${normalizedBaseUrl}/messages`
 			: `${normalizedBaseUrl}/v1/messages`;
 
-		const response = await fetch(url, {
-			method: "POST",
-			headers,
-			body: JSON.stringify(requestBody),
-			signal,
-		});
-
-		if (!response.ok) {
-			const errorText = await response.text();
-			throw new Error(`Anthropic API request failed: [${response.status}] ${response.statusText}\n${errorText}`);
-		}
+		const response = await postJson(url, headers, requestBody, signal, "Anthropic API request failed");
 
 		if (!response.body) {
 			throw new Error("No response body from Anthropic API");

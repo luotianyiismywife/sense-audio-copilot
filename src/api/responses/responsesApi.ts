@@ -15,19 +15,18 @@ import {
     isToolResultPart,
     convertToolsToOpenAI,
     mapRole,
-    storeDataUriImages,
     replaceDataUriImages,
     tryParseJSONObject,
 } from "../../core/utils";
 import { CommonApi, StreamUsage } from "../commonApi";
-import { consumeSseStream } from "../sse";
 import { logger } from "../../core/logger";
-import type { StoredImage } from "../../vision/types";
 import {
     ASK_IMAGE_TOOL_NAME,
     ASK_IMAGE_TOOL_DEF,
     ASK_WITH_MULTI_IMAGE_TOOL_NAME,
     ASK_WITH_MULTI_IMAGE_TOOL_DEF,
+    buildUserImageReference,
+    buildToolImageReference,
 } from "../../vision/types";
 import type {
     ResponsesContentBlock,
@@ -37,6 +36,7 @@ import type {
     ResponsesOutputItem,
     ResponsesFunctionCallItem,
 } from "./responsesTypes";
+import { postJson } from "../httpClient";
 
 /**
  * OpenAI Responses API implementation (POST /v1/responses).
@@ -58,9 +58,6 @@ import type {
  * - reasoning: { effort: "none" } disables thinking; { effort: "high" } enables it.
  */
 export class ResponsesApi extends CommonApi<ResponsesInputMessage, Record<string, unknown>> {
-    /** Whether images were found during convertMessages for ask_image tool. */
-    private _hasImages = false;
-
     /** Buffer for assembling streamed function_call items by output_index. */
     private _responsesToolCallBuffers: Map<number, { id?: string; callId?: string; name?: string; args: string }> =
         new Map<number, { id?: string; callId?: string; name?: string; args: string }>();
@@ -89,34 +86,8 @@ export class ResponsesApi extends CommonApi<ResponsesInputMessage, Record<string
         this._systemContent = undefined;
 
         // Collect images to instance-local array if model doesn't support vision
-        const imagesToStore: StoredImage[] = [];
         if (!modelSupportsVision) {
-            for (const m of messages) {
-                for (const part of m.content ?? []) {
-                    if (part instanceof vscode.LanguageModelDataPart && isImageMimeType(part.mimeType)) {
-                        imagesToStore.push({ data: part.data, mimeType: part.mimeType });
-                    }
-                    if (isToolResultPart(part)) {
-                        const toolContent = (part as { content?: ReadonlyArray<unknown> }).content;
-                        if (toolContent) {
-                            for (const inner of toolContent) {
-                                if (inner instanceof vscode.LanguageModelDataPart && isImageMimeType(inner.mimeType)) {
-                                    imagesToStore.push({ data: inner.data, mimeType: inner.mimeType });
-                                } else if (inner instanceof vscode.LanguageModelTextPart) {
-                                    storeDataUriImages(inner.value, imagesToStore);
-                                }
-                            }
-                        }
-                    }
-                    if (part instanceof vscode.LanguageModelTextPart) {
-                        storeDataUriImages(part.value, imagesToStore);
-                    }
-                }
-            }
-            if (imagesToStore.length > 0) {
-                this._localImages = imagesToStore;
-                this._hasImages = true;
-            }
+            this.collectLocalImages(messages);
         }
 
         for (const m of messages) {
@@ -139,9 +110,7 @@ export class ResponsesApi extends CommonApi<ResponsesInputMessage, Record<string
                     if (modelSupportsVision) {
                         imageParts.push(part);
                     } else {
-                        textParts.push(
-                            `\n[The user sent an image (imageIndex=${imageIndex}). I am a text-only model and CANNOT see images directly. I MUST call the ask_image tool to learn about it.\n\nRecommended strategy:\n1. First call ask_image for a brief description to get an overview of the image.\n2. Then call ask_image again with specific questions about details you need (e.g., colors, text content, UI elements, error messages, or any other visible information).\n]`
-                        );
+                        textParts.push("\n" + buildUserImageReference(imageIndex));
                         imageIndex++;
                     }
                 } else if (part instanceof vscode.LanguageModelToolCallPart) {
@@ -167,9 +136,7 @@ export class ResponsesApi extends CommonApi<ResponsesInputMessage, Record<string
                                     toolTexts.push(result.text);
                                 }
                             } else if (!modelSupportsVision && inner instanceof vscode.LanguageModelDataPart && isImageMimeType(inner.mimeType)) {
-                                toolTexts.push(
-                                    `\n[Image data from tool call (imageIndex=${imageIndex}). I am a text-only model and CANNOT see images directly. I MUST call the ask_image tool to learn about it.\n\nRecommended strategy:\n1. First call ask_image for a brief description to get an overview of the image.\n2. Then call ask_image again with specific questions about details you need (e.g., colors, text content, UI elements, error messages, or any other visible information).\n]`
-                                );
+                                toolTexts.push("\n" + buildToolImageReference(imageIndex));
                                 imageIndex++;
                             }
                         }
@@ -248,16 +215,7 @@ export class ResponsesApi extends CommonApi<ResponsesInputMessage, Record<string
         }
 
         // temperature / top_p
-        if (um?.temperature !== undefined && um.temperature !== null) {
-            if (um.supportsTemperature !== false) {
-                rb.temperature = um.temperature;
-            }
-        }
-        if (um?.top_p !== undefined && um.top_p !== null) {
-            if (um.supportsTemperature !== false) {
-                rb.top_p = um.top_p;
-            }
-        }
+        this.applyTemperature(rb, um);
 
         // max_output_tokens
         if (um?.max_completion_tokens !== undefined) {
@@ -335,18 +293,20 @@ export class ResponsesApi extends CommonApi<ResponsesInputMessage, Record<string
         progress: Progress<LanguageModelResponsePart>,
         token: CancellationToken
     ): Promise<void> {
-        this._resetStreamState();
-        this._responsesToolCallBuffers.clear();
-        this._completedResponsesToolCalls.clear();
-
-        await consumeSseStream(responseBody, {
-            tag: "responses",
-            modelId: this._modelId,
+        await this.runSseStream(
+            responseBody,
+            progress,
             token,
-            onEvent: (parsed) => this.processResponsesEvent(parsed as ResponsesStreamEvent, progress),
-            onDone: () => this.flushResponsesToolCalls(progress, false),
-            onFinally: () => this.reportEndThinking(progress),
-        });
+            "responses",
+            (parsed) => this.processResponsesEvent(parsed as ResponsesStreamEvent, progress),
+            {
+                onBefore: () => {
+                    this._responsesToolCallBuffers.clear();
+                    this._completedResponsesToolCalls.clear();
+                },
+                onDone: () => this.flushResponsesToolCalls(progress, false),
+            }
+        );
     }
 
     /**
@@ -592,17 +552,7 @@ export class ResponsesApi extends CommonApi<ResponsesInputMessage, Record<string
         const headers = CommonApi.prepareHeaders(apiKey, "openai", model.headers);
         const url = `${baseUrl.replace(/\/+$/, "")}/responses`;
 
-        const response = await fetch(url, {
-            method: "POST",
-            headers,
-            body: JSON.stringify(body),
-            signal,
-        });
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`Responses API error: [${response.status}] ${response.statusText}${errorText ? `\n${errorText}` : ""}`);
-        }
+        const response = await postJson(url, headers, body, signal, "Responses API error");
 
         const json = (await response.json()) as {
             output?: ResponsesOutputItem[];

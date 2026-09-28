@@ -9,8 +9,10 @@ scripts/out/
 *.vsix
 
 # VS Code
-.vscode/settings.json
-.vscode/
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/extensions.json
 
 # OS files
 .DS_Store

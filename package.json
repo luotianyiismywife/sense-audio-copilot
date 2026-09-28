@@ -517,10 +517,13 @@
 	"main": "./out/extension.js",
 	"scripts": {
 		"vscode:prepublish": "npm run compile",
-		"compile": "tsc -p ./ && node scripts/build/build-info.mjs && node scripts/dev/check-settings.mjs",
+		"clean": "node scripts/build/clean.mjs",
+		"compile": "node scripts/build/clean.mjs && tsc -p ./ && node scripts/build/build-info.mjs && node scripts/dev/check-settings.mjs",
 		"audit": "node scripts/dev/audit-all.mjs",
 		"lint": "eslint",
 		"watch": "tsc -watch -p ./",
+		"test": "npm run compile && npm run test:offline",
+		"test:offline": "node test/test-plan-usage.mjs && node test/test-transient-retry.mjs && node test/test-vision-history.mjs && node test/test-anthropic-tool-result-merge.mjs",
 		"build": "node scripts/build/package-vsix.mjs",
 		"postinstall": "node scripts/build/copy-tokenizer.js"
 	},

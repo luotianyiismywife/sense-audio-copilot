@@ -161,7 +161,7 @@ const zhCN: Record<string, string> = {
 		"当前 API Key 不可用（{0}）。single 模式仅在余额不足（402）时才自动切换 key；请稍后重试，或使用「管理 API Keys」命令检测/切换。",
 	"No API keys configured": "未配置 API Key",
 
-	// apiKeyManagerUi.ts - 登录 token 查询余额/套餐用量（platform.senseaudio.cn/api/user/self）
+	// apiKeyFlows.ts - 登录 token 查询余额/套餐用量（platform.senseaudio.cn/api/user/self）
 	"Query Balance / Plan Usage": "查询余额 / 套餐用量",
 	"Enter the login PASETO token (F12 → Application → Local Storage → senseaudio.cn → user → state.token, valid 60 days)":
 		"输入登录 PASETO token（F12 → Application → Local Storage → senseaudio.cn → user → state.token，60 天有效）",

@@ -9,10 +9,11 @@ import {
     CancellationToken,
 } from "vscode";
 import { SenseAudioModelItem } from "../core/types";
-import { tryParseJSONObject } from "../core/utils";
+import { tryParseJSONObject, isImageMimeType, isToolResultPart, storeDataUriImages } from "../core/utils";
 import { VersionManager } from "../core/versionManager";
 import type { InterceptedToolCall, StoredImage } from "../vision/types";
 import { ASK_IMAGE_TOOL_NAME, ASK_WITH_MULTI_IMAGE_TOOL_NAME } from "../vision/types";
+import { consumeSseStream } from "./sse";
 
 /**
  * Token usage information extracted from streaming response usage chunk.
@@ -101,6 +102,12 @@ export abstract class CommonApi<TMessage, TRequestBody> {
      * Lives on the instance only — no global Map, automatically GC'd.
      */
     protected _localImages: StoredImage[] = [];
+
+    /**
+     * Whether images were found during convertMessages (non-vision models only).
+     * Drives ask_image / ask_with_multi_image tool injection in prepareRequestBody.
+     */
+    protected _hasImages = false;
 
     /**
      * Store the converted API messages so the provider can reference them
@@ -459,6 +466,116 @@ export abstract class CommonApi<TMessage, TRequestBody> {
         }
         progress.report(new vscode.LanguageModelTextPart(content));
         return { emittedAny: true };
+    }
+
+    /**
+     * 收集消息中的图片并存入实例局部数组（仅非视觉模型需要）。
+     *
+     * 扫描范围：① 直接的图片 DataPart；② 工具结果内嵌的图片 DataPart；
+     * ③ 文本 part 中的 base64 data URI 图片。命中后设置 `_localImages` 与
+     * `_hasImages`，供 `prepareRequestBody` 注入 ask_image 工具。
+     *
+     * 三协议 `convertMessages` 共用（原先各自重复约 40 行）。
+     */
+    protected collectLocalImages(messages: readonly LanguageModelChatRequestMessage[]): void {
+        const imagesToStore: StoredImage[] = [];
+        for (const m of messages) {
+            for (const part of m.content ?? []) {
+                if (part instanceof vscode.LanguageModelDataPart && isImageMimeType(part.mimeType)) {
+                    imagesToStore.push({ data: part.data, mimeType: part.mimeType });
+                }
+                // Also scan inside tool result content for images
+                // (e.g., when view_image tool returns an image in a previous turn)
+                if (isToolResultPart(part)) {
+                    const toolContent = (part as { content?: ReadonlyArray<unknown> }).content;
+                    if (toolContent) {
+                        for (const inner of toolContent) {
+                            if (inner instanceof vscode.LanguageModelDataPart && isImageMimeType(inner.mimeType)) {
+                                imagesToStore.push({ data: inner.data, mimeType: inner.mimeType });
+                            } else if (inner instanceof vscode.LanguageModelTextPart) {
+                                // Scan text for base64 data URI images
+                                storeDataUriImages(inner.value, imagesToStore);
+                            }
+                        }
+                    }
+                }
+                // Scan direct text parts for base64 data URI images
+                if (part instanceof vscode.LanguageModelTextPart) {
+                    storeDataUriImages(part.value, imagesToStore);
+                }
+            }
+        }
+        if (imagesToStore.length > 0) {
+            this._localImages = imagesToStore;
+            this._hasImages = true;
+        }
+    }
+
+    /**
+     * 注入 temperature / top_p（模型声明 `supportsTemperature === false` 时跳过）。
+     *
+     * 三协议 `prepareRequestBody` 共用。Anthropic 在 thinking 强制 enabled 时
+     * 需整体跳过温度控制，由调用方自行判断后决定是否调用本方法。
+     */
+    protected applyTemperature(rb: Record<string, unknown>, um: SenseAudioModelItem | undefined): void {
+        if (um?.temperature !== undefined && um.temperature !== null && um.supportsTemperature !== false) {
+            rb.temperature = um.temperature;
+        }
+        if (um?.top_p !== undefined && um.top_p !== null && um.supportsTemperature !== false) {
+            rb.top_p = um.top_p;
+        }
+    }
+
+    /**
+     * 合并模型 `extra` 参数到请求体（`undefined` 值跳过）。
+     *
+     * 三协议 `prepareRequestBody` 共用。
+     */
+    protected mergeExtraParams(rb: Record<string, unknown>, um: SenseAudioModelItem | undefined): void {
+        if (um?.extra && typeof um.extra === "object") {
+            for (const [key, value] of Object.entries(um.extra)) {
+                if (value !== undefined) {
+                    rb[key] = value;
+                }
+            }
+        }
+    }
+
+    /**
+     * 统一的 SSE 流消费骨架（三协议 `processStreamingResponse` 共用）。
+     *
+     * 负责：重置流状态 → （可选）协议专属清理 → 逐事件回调 → 结束刷新工具调用
+     * → 结束 thinking。reader 生命周期/取消回调/`[DONE]` 由 `sse.ts` 统一处理。
+     *
+     * @param tag 日志前缀（如 "openai"）。
+     * @param onEvent 每个 SSE 事件的处理器。
+     * @param options.onBefore 重置状态后的协议专属清理（如 Responses 清空自身缓冲）。
+     * @param options.onDone 流结束时的工具调用刷新；缺省为基类 `flushToolCallBuffers`。
+     * @param options.debugChunks 是否记录原始 chunk 日志。
+     */
+    protected async runSseStream(
+        responseBody: ReadableStream<Uint8Array>,
+        progress: Progress<LanguageModelResponsePart>,
+        token: CancellationToken,
+        tag: string,
+        onEvent: (parsed: unknown) => Promise<void> | void,
+        options: {
+            onBefore?: () => void;
+            onDone?: () => Promise<void> | void;
+            debugChunks?: boolean;
+        } = {}
+    ): Promise<void> {
+        this._resetStreamState();
+        options.onBefore?.();
+        await consumeSseStream(responseBody, {
+            tag,
+            modelId: this._modelId,
+            token,
+            debugChunks: options.debugChunks,
+            onEvent,
+            onDone: options.onDone ?? (() => this.flushToolCallBuffers(progress, false)),
+            onFinally: () => this.reportEndThinking(progress),
+        });
     }
 
     /**

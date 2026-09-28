@@ -84,3 +84,25 @@ export const ASK_WITH_MULTI_IMAGE_TOOL_NAME = "ask_with_multi_image";
 
 export const DEFAULT_VISION_PROMPT =
     "Analyze this image and answer the user's question based on visual content only. Be accurate and specific.";
+
+/**
+ * 非视觉模型收到**用户直接发送的图片**时，替换成的文本引用。
+ *
+ * 用强指令措辞（MUST call the ask_image tool）确保模型知道必须调用 ask_image，
+ * 并给出「先概览、再追问细节」的策略引导。三协议 convertMessages 共用。
+ *
+ * 不含前导换行——需要与相邻文本分隔的调用方自行加 `"\n"` 前缀。
+ */
+export function buildUserImageReference(imageIndex: number): string {
+    return `[The user sent an image (imageIndex=${imageIndex}). I am a text-only model and CANNOT see images directly. I MUST call the ask_image tool to learn about it.\n\nRecommended strategy:\n1. First call ask_image for a brief description to get an overview of the image.\n2. Then call ask_image again with specific questions about details you need (e.g., colors, text content, UI elements, error messages, or any other visible information).\n]`;
+}
+
+/**
+ * 非视觉模型收到**工具结果内嵌图片**时，替换成的文本引用。
+ *
+ * 与 `buildUserImageReference` 措辞一致，仅前缀区分来源（tool call）。
+ * 不含前导换行——需要与相邻文本分隔的调用方自行加 `"\n"` 前缀。
+ */
+export function buildToolImageReference(imageIndex: number): string {
+    return `[Image data from tool call (imageIndex=${imageIndex}). I am a text-only model and CANNOT see images directly. I MUST call the ask_image tool to learn about it.\n\nRecommended strategy:\n1. First call ask_image for a brief description to get an overview of the image.\n2. Then call ask_image again with specific questions about details you need (e.g., colors, text content, UI elements, error messages, or any other visible information).\n]`;
+}
