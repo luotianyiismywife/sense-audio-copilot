@@ -20,9 +20,7 @@
 
 ---
 
-## 2. 端点存在性（2026-09-29 实测探测）
-
-### 2.1 存在的端点
+## 2. 端点清单（2026-09-29 实测探测）
 
 | 端点 | 方法 | 用途 | 实测 |
 |------|------|------|------|
@@ -32,16 +30,6 @@
 | `/v1/messages` | POST | Anthropic 兼容对话 | ✅ 200 |
 | `/v1/responses` | POST | OpenAI Responses 兼容对话 | ✅ 200 |
 | `/v1/audio/transcriptions` | POST | 语音识别（multipart/form-data） | ✅ 存在（非 multipart 报 400 "parse file failed"） |
-
-### 2.2 不存在的端点（404，勿再使用）
-
-| 端点 | 说明 |
-|------|------|
-| `/v1/embeddings` | **404**（旧文档误记，平台无向量嵌入端点） |
-| `/v1/completions`（GET/POST） | 404（无 legacy completions） |
-| `/v1/files` | 404 |
-| `/v1/images/generations` | 404（图片生成走独立端点，见官方文档 image 节） |
-| `/v1/usage`、`/v1/dashboard/billing/usage` | 404（用量查询走 `platform.senseaudio.cn`，见 §7） |
 
 ---
 
