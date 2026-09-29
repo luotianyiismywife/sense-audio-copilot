@@ -1,48 +1,178 @@
-# SenseAudio API 参考记录
+# SenseAudio 平台 API 实测参考
 
-> ⚠️ **遇到 SenseAudio API 集成问题（参数 400、协议不兼容、能力标记等）时，优先查看本文档和官方 API 文档**：
-> - 官方 API 文档：<https://docs.senseaudio.cn/api-reference/introduction>
-> - 调试时以官网示例（cURL/Node.js）为基准，对比插件请求体差异。
-> - Responses API（`/v1/responses`）的实测行为见 `test/test-responses-recheck.mjs`（工具格式扁平化、function_call 块、tool_choice）。
+> ⚠️ **本文档全部基于实测**（2026-09-29，用真实 key 逐项验证），不是对官方文档的转抄。
+> 官方文档：<https://docs.senseaudio.cn/api-reference/introduction>（部分内容滞后或与实际不符，以本文实测为准）。
+> 复测脚本：`test/api-tests.mjs`（三协议全量）、`test/test-responses-recheck.mjs`（Responses 行为）。
 >
-> 本文档记录 SenseAudio 平台的 API 地址信息，供扩展开发与调试参考。
-> 最后更新：2026-09-23（平台改版重探：三域认证体系 + 套餐用量数据源 + 旧端点 404）
+> 最后更新：2026-09-29（三协议标准符合性全量实测 + 端点存在性探测）
 
 ---
 
-## 1. API 文档
+## 1. 基础信息
 
-| 项目 | 地址 |
-|------|------|
+| 项目 | 值 |
+|------|-----|
+| API 基础地址 | `https://api.senseaudio.cn/v1` |
+| 认证方式 | `Authorization: Bearer <API_KEY>`（Anthropic 端点也接受 `x-api-key`） |
 | API 文档 | <https://docs.senseaudio.cn/api-reference/introduction> |
-| 模型列表页 | <https://docs.senseaudio.cn/guides/account/model-list-billing> |
-| 注册 / 获取 API Key | <https://senseaudio.cn/api-platform/api-key> |
+| 模型列表页 | <https://docs.senseaudio.cn/guides/account/model-list> |
+| 获取 API Key | <https://senseaudio.cn/api-platform/api-key> |
 
 ---
 
-## 2. 统一基础地址
+## 2. 端点存在性（2026-09-29 实测探测）
+
+### 2.1 存在的端点
+
+| 端点 | 方法 | 用途 | 实测 |
+|------|------|------|------|
+| `/v1/models` | GET | 模型列表 | ✅ 200 |
+| `/v1/models/{id}` | GET | 单模型详情 | ✅ 200 |
+| `/v1/chat/completions` | POST | OpenAI 兼容对话 | ✅ 200 |
+| `/v1/messages` | POST | Anthropic 兼容对话 | ✅ 200 |
+| `/v1/responses` | POST | OpenAI Responses 兼容对话 | ✅ 200 |
+| `/v1/audio/transcriptions` | POST | 语音识别（multipart/form-data） | ✅ 存在（非 multipart 报 400 "parse file failed"） |
+
+### 2.2 不存在的端点（404，勿再使用）
+
+| 端点 | 说明 |
+|------|------|
+| `/v1/embeddings` | **404**（旧文档误记，平台无向量嵌入端点） |
+| `/v1/completions`（GET/POST） | 404（无 legacy completions） |
+| `/v1/files` | 404 |
+| `/v1/images/generations` | 404（图片生成走独立端点，见官方文档 image 节） |
+| `/v1/usage`、`/v1/dashboard/billing/usage` | 404（用量查询走 `platform.senseaudio.cn`，见 §7） |
+
+---
+
+## 3. 模型列表 `GET /v1/models`
+
+**实测响应字段集**（全部 llm 条目的字段名并集）：
 
 ```
-https://api.senseaudio.cn/v1
+id, display_name, object, type, mode, protocols, created, owned_by, desc
 ```
 
-所有端点均在统一基础地址下。
+> ⚠️ **不返回任何规格/能力字段**：无 `context_length`、`max_completion_tokens`、`supports_vision`、`supports_reasoning`、`supports_tools`。
+> 规格需查[官方模型页](https://docs.senseaudio.cn/guides/account/model-list)；视觉能力经 models.dev 判定（见 `src/models/visionModels.ts`）。
+
+- `mode` 区分模态：`llm` / `stt` / `tts` / `image` / `video` / `music` / `voice_clone` / …（**只有 `mode === "llm"` 是对话模型**）
+- `protocols` 数组推导协议能力：`["chat_completions", "responses", "messages"]` → 三协议全支持
+- **2026-09-29 实测**：9 个 llm 模型的 `protocols` 均为三协议全支持
+
+### 当前 llm 模型（2026-09-29 实测，9 个）
+
+| 模型 ID | 视觉 | 上下文/输出（官方文档） |
+|---------|------|----------------------|
+| `senseaudio-s2` | ❌ | 1M / 128K |
+| `senseaudio-s2-flash` | ❌ | 256K / 64K |
+| `senseaudio-s2-lite` | ❌ | 256K / 64K |
+| `sensenova-6.8-flash-lite` | ❌ | 文档为 `—`（暂按 256K/64K 假定） |
+| `qwen3.8-27b` | ✅ | 256K / 32K |
+| `qwen3.6-35b-a3b` | ✅ | 256K / 64K |
+| `deepseek-v4.1-flash` | ✅ | 1M / 384K |
+| `deepseek-v4-flash-0731` | ❌ | 1M / 384K |
+| `glm-5.3-flash` | ✅ | 1M / 128K |
+
+> 视觉判定来源：models.dev（与 OpenRouter `architecture.input_modalities` 交叉验证一致）。
+> `/v1/models` **不校验余额**（余额 < 0 也 200），不能作可用性判据。
 
 ---
 
-## 3. 主要端点
+## 4. 三协议标准符合性（2026-09-29 全量实测）
 
-| 端点 | 方法 | 用途 |
-|------|------|------|
-| `/v1/models` | `GET` | 模型列表（含能力标记 `supports_responses` / `supports_anthropic` 等） |
-| `/v1/chat/completions` | `POST` | OpenAI 兼容对话 |
-| `/v1/messages` | `POST` | Anthropic 兼容对话 |
-| `/v1/responses` | `POST` | Responses API 对话（`supports_responses` 模型原生支持） |
-| `/v1/embeddings` | `POST` | 向量嵌入 |
+> 测试模型 `glm-5.3-flash`，共 30+ 项对照测试。结论：**三协议均高度符合各自标准**，仅一个共同缺口（见 4.4）。
+
+### 4.1 OpenAI 协议 `/v1/chat/completions` — 11/11 全通过 ✅
+
+| 标准特性 | 实测 |
+|---------|------|
+| 基础对话 / 多模态 `content` 数组 | ✅ |
+| 嵌套工具格式 `{type:"function",function:{...}}` | ✅ |
+| `tool_choice`: `auto` / `required` / **`{type:"function",function:{name}}`** | ✅ 命名形式可用且**真的强制指定工具** |
+| 多轮 `tool_calls` + `tool` role 回填 | ✅ |
+| `stop` / `response_format` / `n` / `frequency_penalty` / `presence_penalty` / `seed` | ✅ |
+
+**平台特有参数**（非 OpenAI 标准）：
+- `thinking`: `{type:"enabled"}` / `{type:"auto"}`（自适应）/ `{type:"disabled"}`——**仅接受字符串语义**，`adaptive` 会被拒绝
+- `reasoning_effort`: `low` / `medium` / `high` / `xhigh` / `max` / `none`（`disabled` 会 400，正确值是 `none`）
+
+### 4.2 Anthropic 协议 `/v1/messages` — 12/13 ✅
+
+| 标准特性 | 实测 |
+|---------|------|
+| 基础对话 / `system` 顶层字段 / `max_tokens`（必传） | ✅ |
+| `tool_use` / `tool_result` 块回填 | ✅ |
+| `tool_choice`: `{type:"auto"}` / `{type:"any"}` / `{type:"none"}` | ✅ |
+| `thinking`: `{type:"enabled",budget_tokens}` / `{type:"adaptive"}` / `{type:"disabled"}` | ✅ |
+| 图片块（标准 `source:{type:"base64",media_type,data}` 结构） | ✅ |
+| `stop_sequences` / `top_k` / `metadata` / **assistant 预填充** | ✅ |
+| **`tool_choice: {type:"tool",name}`** | ❌ **稳定 500**（见 4.4） |
+
+**认证**：`x-api-key` 与 `Authorization: Bearer` 均可；`anthropic-version` 头非必需（建议保留）。
+
+**thinking + temperature 组合**（历史踩坑，已修复）：
+- 2026-08-06 实测：`enabled` + temperature → 400 "请求参数组合无效"
+- 2026-09-23 复测：**已修复**，`enabled` + temp/top_p → 200
+- 插件仍保留"thinking 强制 enabled 时跳过 temperature/top_p"的逻辑（无害，符合 Anthropic 标准）
+
+### 4.3 Responses 协议 `/v1/responses` — 11/12 ✅
+
+| 标准特性 | 实测 |
+|---------|------|
+| 基础对话 / `instructions` 顶层字段 | ✅ |
+| **扁平工具格式** `{type:"function",name,description,parameters}` | ✅（这是 Responses 标准格式，与 Chat Completions 的嵌套格式不同**不是平台问题**） |
+| **顶层 `function_call` item 回填**（标准写法） | ✅ **模型正确理解工具历史** |
+| `tool_choice`: `auto` / `none` / `required` | ✅ |
+| `input_image` 块 | ✅ |
+| `max_output_tokens` / `reasoning:{effort}` / `text.format` / `store` / `parallel_tool_calls` | ✅ |
+| **`tool_choice: {type:"function",name}`** | ❌ **稳定 500**（见 4.4） |
+
+**⚠️ 纠正上游遗留的两个错误结论**（2026-09-29 实测推翻）：
+
+| 上游文档说 | 实测事实 |
+|-----------|---------|
+| "拒绝 `function_call` / `function_call_output` 内容块" | **错**。**顶层** item（`{type:"function_call",call_id,name,arguments}` + `{type:"function_call_output",call_id,output}`）完全可用。上游用的是错误写法（塞进 `assistant.content` 数组） |
+| "工具格式与自家 OpenAI 端点不一致是问题" | **不是问题**。Responses 扁平 / Chat Completions 嵌套——这正是 OpenAI 官方规范，两端点本来就不同 |
+
+**流式推理事件类型因模型而异**（网关透传各模型后端事件，未统一转换）：
+- 部分模型：`response.reasoning_summary_text.delta`
+- 部分模型：`response.reasoning_text.delta`
+- glm-5.3-flash 实测：`response.reasoning_part.added` / `response.reasoning_text.delta` / `response.reasoning_text.done` / `response.reasoning_part.done`
+- 插件已兼容多种事件类型 ✅
+
+### 4.4 唯一共同缺口：命名 tool_choice（确定性缺陷，非瞬时繁忙）
+
+```
+OpenAI:     tool_choice: {type:"function", function:{name:"get_weather"}}  → 200 ✅（且真的强制指定工具）
+Anthropic:  tool_choice: {type:"tool", name:"get_weather"}                 → 500 ❌（8/8 次全失败）
+Responses:  tool_choice: {type:"function", name:"get_weather"}             → 500 ❌（8/8 次全失败）
+```
+
+**证据**（排除"平台繁忙"解释）：
+- 交错对照实验：同一时刻、同一模型、同一工具，间隔 0.5s 连发——`auto`/`any`/`required` 全 200，**只有命名形式 500**
+- 重复 6 次 + 交错 2 轮，命名形式 **8/8 全 500**
+- 报错文案 `"服务繁忙，请稍后再试"`（`ref_code:500000`）是**误导性包装**——实际是网关层对"指定具体工具"路由的确定性缺陷
+
+**插件影响：无**（插件从不发送命名形式，`responsesApi` 把具名归入 `auto`，`anthropicApi` 不处理具名）。
 
 ---
 
-## 4. 代码中的引用位置
+## 5. 错误响应格式（实测）
+
+| 场景 | HTTP | 响应体 |
+|------|------|--------|
+| 余额不足 | 402 | `{"code":"INSUFFICIENT_BALANCE","message":"余额不足"}`（**不消耗 token**） |
+| 计费账户冻结（封号） | 400 | `{"code":"billing","message":"计费账户已被冻结","ref_code":400901}` |
+| 无效 key | 401 | — |
+| 无效模型 ID | 4xx | 含 `error.message` |
+| 命名 tool_choice | 500 | `{"code":"internal","message":"服务繁忙，请稍后再试","ref_code":500000}` |
+| 非视觉模型发图片 | 500 | 同上（三端点同款） |
+| public_key 不存在 | — | `rpc error: code = NotFound desc = notfound.apikey_not_exists`（auth 域） |
+
+---
+
+## 6. 代码中的引用位置
 
 | 文件 | 常量 / 位置 |
 |------|-------------|
@@ -54,107 +184,54 @@ https://api.senseaudio.cn/v1
 
 ---
 
-## 5. 常见混淆说明
+## 7. 用户中心 API（platform.senseaudio.cn，2026-09-23 实测）
 
-> **models.dev ≠ SenseAudio API 文档**
+> 三域认证体系：`senseaudio.cn/api/*`（cookie）/ `platform.senseaudio.cn/api/*`（Bearer PASETO）/ `auth.senseaudio.cn`（public_key 换发）。
 
-- `models.dev`（<https://models.dev/models.json>）是 **OpenRouter 维护的全球模型目录数据库**，仅用于本扩展**自动模型发现**时获取新模型的规格元数据（上下文长度、视觉能力、工具调用、推理能力等），由 `src/models/modelsDev.ts` 下载并缓存。
-- 扩展**实际请求**走的是上方 `https://api.senseaudio.cn/v1` 地址，两者用途不同，勿混淆。
+### 7.1 `GET platform.senseaudio.cn/api/user/self`（套餐用量核心数据源）
 
----
+认证：`Authorization: Bearer <PASETO token>` + 必需头 `x-platform: WEB` / `x-product: SenseAudio`（缺则 403 `ref_code:403002`）。
 
-## 6. 已确认的平台规则与踩坑记录
+token 来源：浏览器 `localStorage` 的 `user.state.token`（PASETO v2.public，60 天有效）。
 
-> 来源：官方文档示例 + `test/api-tests.mjs` 实测（2026-08-03）+ 2026-08-06 生产排障 + 2026-08-26 官方文档核对（Anthropic/DeepSeek）。
-
-| 规则 | 说明 |
-|------|------|
-| **Anthropic 端点认证头（2026-09-23 实测）** | **`x-api-key` 与 `Authorization: Bearer` 均可**（同请求仅带其一均 200，无认证头 401 `authentication_error`）；`anthropic-version` 头**非必需**（不带也 200）。官方文档写“所有接口均使用 Bearer Token”，但端点实际兼容标准 Anthropic SDK 的 `x-api-key`。**插件保持现状**（anthropic 模式发 `x-api-key` + `anthropic-version`，openai/responses 发 `Bearer`），无需改代码 |
-| Anthropic 协议必带头 | `anthropic-version: 2023-06-01`（实测非必需但建议保留）+ 必须传 `max_tokens` |
-| DeepSeek `tool_choice` | 传字符串 `none` / `auto` / `required`，**不要传对象形式** |
-| OpenAI 端点 `thinking` | 仅接受字符串语义：`{ type: "enabled" }` / `{ type: "auto" }`（自适应；`adaptive` 会被拒绝）/ `{ type: "disabled" }` |
-| **Anthropic 端点 `thinking`** | **2026-09-23 全量复测（deepseek-v4-flash-0731）**：`enabled`（无 temp）→ 200 且输出 `thinking` 块；`enabled` + temperature → **200**（2026-08-06 的 400 冲突**已修复**）；`enabled` + temp + top_p → 200；`adaptive` → 200；`disabled` → 200。**插件可简化**：无需再跳过 temperature/top_p（但保留跳过逻辑无害） |
-| **Anthropic 端点 `tool_choice`（2026-09-23 实测）** | `auto`（对象形式）→ 200；`any` → 200（强制工具调用）；`none` → 200；**指定工具形式 `{type:"tool", name}` → 稳定 500**（“服务繁忙”，与 Responses 端点同款问题）。插件仅发 auto/any/none，正确 |
-| **Anthropic 端点图片输入（2026-09-23 实测）** | 视觉模型（glm-5.3-flash）base64 图片 → 200 正常识别；**非视觉模型（deepseek-v4-flash-0731）发图片 → 稳定 500**（“服务繁忙”，OpenAI/Responses 端点同款）——**非视觉模型不应直接发图片**，插件已通过 ask_image 代理规避 |
-| **Anthropic 端点其他参数（2026-09-23 实测）** | `top_k` → 200；`system` 字段 → 200；多轮 `tool_use`/`tool_result` 回填 → 200；历史 `thinking` 块回传 → 200；流式 SSE 事件（message_start/content_block_start/delta/stop）→ 标准 Anthropic 格式 |
-| **Anthropic 模式 temperature/top_p** | **2026-08-06 实测 4 组合：enabled+temp→400、enabled+top_p→400、adaptive+temp+top_p→200、disabled+temp→200；生产复现 `trace_201493fe`。2026-09-23 复测：enabled+temp→200、enabled+temp+top_p→200，冲突已修复**。判定结论（2026-08-26）：这是 Anthropic 标准协议行为，不是平台 bug——Anthropic 官方文档（Thinking 页 *Limits and feature compatibility*）原文：*"On older models, the restriction applies only while thinking is on: `temperature` and `top_k` are incompatible with thinking, and `top_p` is allowed at values between 0.95 and 1"*。**插件已修复：仅 thinking 强制 enabled 时跳过 temperature/top_p**（`src/anthropic/anthropicApi.ts` `prepareRequestBody`，adaptive/disabled 保留温度，top_k 恒保留）。**平台侧 3 个可改进点**：① 400 报错文案含糊（"请求参数组合无效"，不如 Anthropic 官方给出 "temperature is not supported with extended thinking" 语义），排障困难；② 与自家 OpenAI 端点行为不一致（OpenAI 端点实测 200 容忍忽略）；③ 文档未提示此约束（2026-09-23 复测该约束已消失） |
-| **DeepSeek 官方对 temperature+thinking 的立场** | **模型厂商官方认为二者不冲突**：① OpenAI 格式（official `/guides/thinking_mode`）：*"Thinking mode does not support the `temperature`, `top_p`, `presence_penalty`, or `frequency_penalty` parameters. Please note that, for compatibility with existing software, setting these parameters will not trigger an error but will also have no effect"*——**设置了不报错只不生效**；② Anthropic 兼容层（official `/guides/anthropic_api` 兼容表）：`temperature` **Fully Supported** (range 0.0~2.0)、`top_p` **Fully Supported**、`thinking` Supported (budget_tokens ignored)。**结论："deepseek thinking enabled 冲突"只在 Anthropic 协议形态下存在（Anthropic 标准要求拒绝），DeepSeek 官方自家端点两种格式均容忍。插件按协议形态适配即可，无需改代码** |
-| **Anthropic 协议建议** | **建议优先使用 OpenAI 兼容格式**：Anthropic 端点按 Anthropic 标准对部分组合更严格（如 thinking enabled + temperature → 400），OpenAI 端点容忍该组合（设置了不报错只不生效，与 DeepSeek 官方一致）。仅在明确需要 Anthropic 原生 Messages 格式时使用 |
-| 流式响应解析 | OpenAI SSE `choices[0].delta.content`；Anthropic 原生 Messages 流式事件。**两种协议不要混用解析器** |
-| Responses 端点工具格式 | 工具定义需**扁平格式** `{ type: "function", name, description, parameters }`（OpenAI 嵌套 `function` 格式会被拒） |
-| Responses `tool_choice` | `auto` / `none` / `required` 可用；具名形式 `{type:"function",name}` 返回稳定 500，插件从不发送 |
-| Anthropic 协议非全量 | 以 `/v1/models` 的 `protocols` 动态标记为准（不硬编码模型 ID） |
-| 图片尺寸限制 | 部分模型要求图片 >= 10x10 像素 |
-
----
-
-## 7. 用户中心 API（2026-09-23 平台改版重探）
-
-> ⚠️ **平台已改版（2026-09-23 实测）**：旧端点 `senseaudio.cn/api/usage-summary` 与 `/api/api-keys` **均已 404**（2026-08-24 实测还是 200）。
-> 用户中心已迁移为**三域三制**认证体系，套餐用量数据源变更为 `platform.senseaudio.cn/api/user/self`。
-
-### 7.0 三域认证体系（2026-09-23 实测）
-
-| 域 | 认证方式 | 说明 |
-|----|---------|------|
-| `senseaudio.cn/api/*` | `tr_session` cookie | 主站会话（页面登录态）；`/api/config` 无需认证 200；旧端点 `usage-summary`/`api-keys` 已 404 |
-| `platform.senseaudio.cn/api/*` | **`Authorization: Bearer <PASETO token>`** + `x-platform: WEB` / `x-product: SenseAudio` / `x-version: 1.0.2` / `x-language: zh-cn` / `x-machine: <hash>` 头 | **不是 cookie！** token 来自 `localStorage.user.state.token`（PASETO v2.public，有效期 60 天，payload 含 user_id/role/platform=WEB/login_id）；无 token → 403 `forbidden`（`ref_code:403002`） |
-| `auth.senseaudio.cn/v1/apikey/apply_token_via_public_key` | public_key 换发 | 用 `pub-*` 公钥换发**短期 API token**（24h 有效，响应含 `token` + `expireAt` epoch 秒） |
-
-> **插件影响**：插件只有 `tr_session` cookie，**拿不到 localStorage 里的 PASETO token**（httpOnly 页面上下文），因此无法直接调用 `platform.senseaudio.cn/api/*`。旧 `tr_session` cookie 端点已 404，`balanceCheck.ts` 的余额预检与平台 Key 数量查询会全部失败（好在失败时静默降级不阻塞请求）。
-
-### 7.1 套餐用量核心数据源：`GET platform.senseaudio.cn/api/user/self`（Bearer token）
-
-响应里的 **`usage_infos`** 数组就是网页「Token 套餐 → 套餐用量限制」三块卡片的数据：
+响应关键字段：
 
 ```jsonc
-"usage_infos": [
-  { "key": "credit_5h_limit",  "desc": "5小时积分",       "used_count": 0,     "pending_count": 0, "total_count": 10000, "reset_time": 1790099464 },
-  { "key": "credit_7d_limit",  "desc": "每周全部模型积分", "used_count": 0,     "pending_count": 0, "total_count": 10000, "reset_time": 1790524800 },
-  { "key": "credit_30d_limit", "desc": "30天积分",        "used_count": 10012, "pending_count": 0, "total_count": 10000, "reset_time": 1792166400 }
-]
-```
-
-- `reset_time` 为 epoch 秒：5小时窗口 = 上次消耗积分后 +5h；每周 = 周一 00:00；30天 = 套餐生效日 +30天
-- **30天已用 10012 > 上限 10000**（超限后走额外用量）
-
-### 7.2 额外用量（余额）数据源：同响应的 `account_info`
-
-```jsonc
+"usage_infos": [   // 三窗口用量（5h/周/月）
+  { "key": "credit_5h_limit",  "desc": "5小时积分",  "used_count": 0, "pending_count": 0, "total_count": 10000, "reset_time": 1790099464 },
+  { "key": "credit_7d_limit",  "desc": "每周全部模型积分", ... },
+  { "key": "credit_30d_limit", "desc": "30天积分",   ... }
+],
 "account_info": {
-  "balance": 0,                    // 现金余额（备用扣减，元）
-  "balance_in_flight": 0,
-  "channel_balance": 0,
-  "credits": [],
-  "vouchers": [                     // 代金券，单位 = 积分（1 元 = 5000 积分）
-    { "voucher_id": 66804, "name": "注册赠送代金券", "available": 18779586, "total": 20000000, "used": 1220414, "pending": 0, "expire_at": 1792168235 },
-    ...
-  ],
+  "balance": 0,                  // 现金余额（元）
+  "vouchers": [ ... ],           // 代金券（单位=积分，1 元 = 1,000,000 积分）
   "status": "NORMAL",
-  "enable_extra_usage": true        // 额外用量开关
+  "enable_extra_usage": true     // 超额开关
 }
 ```
 
-- **代金券单位是积分**：网页显示的「代金券余额 338.78 元」 = Σ可用代金券积分 / 5000
-- **扣减顺序**：套餐积分 → 代金券（按到期时间先后）→ 现金余额
-- `enable_extra_usage: false` 时套餐额度用尽即无法调用
+> ⚠️ **单位陷阱**：代金券 `available` 的换算是 **1 元 = 1,000,000 积分**（2026-09-27 实测校正；曾误用 5000 导致 200 倍误差）。
+> 两套计费规则严格区分：周期额度（5h/周）是**限流窗口**（耗尽等恢复、不扣余额）；套餐积分（月度）才是**订阅额度**（耗尽走超额策略）。
 
-### 7.3 套餐档位：`GET platform.senseaudio.cn/api/recharge/subscribe/list`（Bearer token）
+### 7.2 `POST auth.senseaudio.cn/v1/apikey/apply_token_via_public_key`
 
-`concurrent_rights` 数组含各档位限制：`credit_5h_limit`（5小时积分）/ `credit_7d_limit`（每周全部模型积分）/ `month_base_points`（30天套餐积分）及各能力并发限制（TTS/ASR/图片/视频/音乐/Agent 等）。
+用 `pub-*` 公钥换发短期 API token（实测 30 分钟有效期）。请求体 `{"public_key":"pub-..."}`。
 
-### 7.4 API Key 数据：`GET platform.senseaudio.cn/api/apikey/default`（Bearer token）
-
-返回完整 key（`sk-...`，含 `public_key`/`remain_quota`/`unlimited_quota`/`used_quota`/`expired_time`）。`apikey/list` 稳定 500（已废弃或需特殊权限），网页只用 `apikey/default`。
-
-### 7.5 旧端点状态（2026-09-23 实测，均已失效）
+### 7.3 已失效端点（勿再使用）
 
 | 旧端点 | 现状 |
 |--------|------|
-| `senseaudio.cn/api/usage-summary` | **404**（已迁移/删除） |
-| `senseaudio.cn/api/api-keys` | **404**（已迁移/删除） |
-| `senseaudio.cn/api/auth/me` | 未复测（可能仍存在） |
-| `senseaudio.cn/api/call-logs/page` | 未复测（可能仍存在） |
+| `senseaudio.cn/api/usage-summary` | 404（2026-09-23 实测） |
+| `senseaudio.cn/api/api-keys` | 404 |
 | `platform.senseaudio.cn/api/apikey/list` | 稳定 500（已废弃） |
 
-> **历史记录（2026-08-24，端点尚存时）**：`/api/usage-summary` 返回 `balanceCny`/`availableBalanceCny`/`expiringBalanceCny`/`nextExpiryAt`；`/api/api-keys` 返回 key 列表（`maskedKey`/`keyPrefix`/`status`）；创建/删除 key 受 CSRF + TLS 指纹双重校验（Node.js/curl 无法绕过，仅真实浏览器可行）。这些端点现已 404，记录保留供追溯。
+---
+
+## 8. 常见混淆说明
+
+> **models.dev ≠ SenseAudio API**
+
+- `models.dev`（<https://models.dev/models.json>）是 OpenRouter 维护的全球模型目录，仅用于本扩展**自动模型发现**（规格元数据）与**视觉能力判定**（`src/models/visionModels.ts`）
+- 扩展实际请求走 `https://api.senseaudio.cn/v1`，两者用途不同
+
+> **`/v1/models` 不校验余额**：余额 < 0 也返回 200，不能作为 key 可用性判据。手动检测用最小真实聊天请求（`say ok` + `max_tokens=8`，余额不足时被 402 拦截不耗 token）。
