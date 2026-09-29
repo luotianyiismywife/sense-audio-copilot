@@ -42,7 +42,7 @@ export function applyReasoningEffort(
 /**
  * 注入 temperature / top_p（模型预设或自定义设置）。
  * 模型声明 `supportsTemperature === false` 时清空两者；
- * 模型声明 `fixedTopP`（如 kimi-k2.6 仅接受 0.95）时覆盖用户/预设配置。
+ * 模型声明 `fixedTopP`（如某模型仅接受 0.95）时覆盖用户/预设配置。
  */
 export function applyTemperature(
     um: SenseAudioModelItem,
@@ -56,26 +56,23 @@ export function applyTemperature(
     }
 
     const tempPreset = config.get<string>("senseaudio.modelPreset", "custom");
-    if (tempPreset !== "custom") {
-        const presets = config.get<ModelPreset[]>("senseaudio.modelPresets", []);
-        const matchedPreset = presets.find((p) => p.id === tempPreset);
-        if (matchedPreset) {
-            um.temperature = matchedPreset.temperature;
-        }
+    const presets = config.get<ModelPreset[]>("senseaudio.modelPresets", []);
+    const matchedPreset = tempPreset !== "custom" ? presets.find((p) => p.id === tempPreset) : undefined;
+
+    if (matchedPreset) {
+        um.temperature = matchedPreset.temperature;
+        // A preset may pin top_p; otherwise fall back to the configured value
+        // (default 0.5) so preset mode and custom mode behave consistently.
+        um.top_p = matchedPreset.top_p ?? config.get<number | null>("senseaudio.top_p", null) ?? undefined;
     } else {
         const userTemperature = config.get<number | null>("senseaudio.temperature", null);
         if (userTemperature !== null) {
             um.temperature = userTemperature;
         }
         const userTopP = config.get<number | null>("senseaudio.top_p", null);
-        if (userTopP !== null) {
-            um.top_p = userTopP;
-        } else {
-            // Keep top_p undefined so the model uses its default
-            um.top_p = undefined;
-        }
+        um.top_p = userTopP ?? undefined;
     }
-    // Model-specific top_p whitelist (e.g. kimi-k2.6 only accepts 0.95):
+    // Model-specific top_p whitelist (e.g. a model that only accepts 0.95):
     // override whatever the user/preset configured.
     if (um.fixedTopP !== undefined) {
         um.top_p = um.fixedTopP;

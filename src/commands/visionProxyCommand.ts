@@ -1,25 +1,23 @@
 import * as vscode from "vscode";
 import { l10n, l10nFormat } from "../core/localize";
 import { getPrimaryApiKey } from "../keys/keyManager";
-import { getVisionSupportedModelIds } from "../models/apiModelList";
+import { getVisionSupportedModelIds } from "../models/visionModels";
+import { getApiModelMetadataList } from "../models/apiModelList";
 
 /**
  * 视觉代理模型选择命令（`senseaudio.setVisionProxyModel`）。
- * 从 `/v1/models` 动态加载 `supports_vision=true` 的模型列表供 QuickPick 选择，
- * API 不可用时回退到手动输入。
+ *
+ * 从 `/v1/models` 动态加载视觉模型列表（视觉能力经 models.dev 判定，见
+ * `models/visionModels.ts`）供 QuickPick 选择，API 不可用时回退到手动输入。
  */
 export async function setVisionProxyModelCommand(context: vscode.ExtensionContext): Promise<void> {
     const config = vscode.workspace.getConfiguration();
-    const current = config.get<string>("senseaudio.visionProxyModel", "kimi-k2.6");
+    const current = config.get<string>("senseaudio.visionProxyModel", "qwen3.6-35b-a3b");
     const primary = await getPrimaryApiKey(context.secrets);
     const visionIds = primary ? await getVisionSupportedModelIds(primary.value) : new Set<string>();
-
-    // Capability descriptions matching the settings-page enum descriptions.
-    const VISION_MODEL_DESC: Record<string, string> = {
-        "kimi-k2.6": l10n("Kimi K2.6 — vision-capable (default)"),
-        "senseaudio-vl-1.0-260319": l10n("SenseAudio-VL-1.0 — vision-language model"),
-        "senseaudio-vl-lite-1.0-260319": l10n("SenseAudio-VL-Lite-1.0 — lightweight vision-language model"),
-    };
+    // /v1/models desc is used as the picker tooltip (platform's own description).
+    const metaList = primary ? await getApiModelMetadataList(primary.value) : [];
+    const descById = new Map(metaList.map((m) => [m.id, m.desc]));
 
     interface VisionPick extends vscode.QuickPickItem {
         modelId?: string;
@@ -30,12 +28,20 @@ export async function setVisionProxyModelCommand(context: vscode.ExtensionContex
             ...[...visionIds].sort().map((id) => ({
                 label: id,
                 description: [
-                    VISION_MODEL_DESC[id] ?? undefined,
+                    descById.get(id) ?? undefined,
                     id === current ? `$(check) ${l10n("Current")}` : undefined,
                 ].filter(Boolean).join("  ·  "),
                 modelId: id,
             }))
         );
+        items.push({ label: "", kind: vscode.QuickPickItemKind.Separator });
+    } else {
+        // No vision model detected (API unreachable, or the platform currently
+        // exposes none). Tell the user instead of showing a bare custom entry.
+        items.push({
+            label: `$(warning) ${l10n("No vision-capable model detected")}`,
+            description: l10n("Check your API key / network, or enter a model ID manually"),
+        });
         items.push({ label: "", kind: vscode.QuickPickItemKind.Separator });
     }
     items.push({

@@ -11,6 +11,7 @@
 | `test-transient-retry.mjs` | 离线 | **瞬态错误分类**（13 项断言）：500 命中重试但不命中轮换（平台问题不换 key）、429/503 两者都命中、400/403 都不命中、401/402 仅轮换 |
 | `test-vision-history.mjs` | 离线 | 跨轮视觉历史编解码 + 双 API 转换器闭环（含 DeepSeek 空 reasoning_content 回归） |
 | `test-anthropic-tool-result-merge.mjs` | 离线 | Anthropic 连续工具结果合并（issue #87：3 个并行 tool_use 结果合并为单条 user 消息） |
+| `test-batch-import.mjs` | 离线 | **批量导入解析器**（14 项断言）：`key---cookie---备注;` 格式、空字段、备注含分隔符、容错 |
 | `test-apply-token.mjs` | 联网 | 令牌应用测试 |
 | `test-banned-detect.mjs` | 联网 | 封号检测测试 |
 | `test-banned-rotation.mjs` | 联网 | 封号轮换测试 |
@@ -28,6 +29,7 @@ node test/test-plan-usage.mjs
 node test/test-transient-retry.mjs
 node test/test-vision-history.mjs
 node test/test-anthropic-tool-result-merge.mjs
+node test/test-batch-import.mjs
 
 # 联网测试（需 API Key）
 node test/api-tests.mjs <API_KEY> [openai|anthropic|responses|all]

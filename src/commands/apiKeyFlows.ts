@@ -12,6 +12,7 @@ import {
     getApiKeyStore,
     maskApiKey,
     maskCookie,
+    removeApiKey,
     setKeyCookie,
     updateApiKey,
     updateKeyAvailability,
@@ -123,107 +124,141 @@ export async function addKeyFlow(ctx: KeyManagerContext): Promise<boolean> {
 }
 
 /**
- * 批量导入流程：表单式逐条输入 (key/cookie/label) 三元组，Finish 时一次性写入。
+ * 解析批量导入文本。
+ *
+ * 格式：`key---cookie---备注;key---cookie---备注;`
+ * - 条目之间用 `;` 分隔（末尾分号可省略）
+ * - 每条内三个字段用 `---` 分隔，顺序固定为 key / cookie / 备注
+ * - 字段可留空（如 `sk_xxx------备用` 表示无 cookie）
+ * - 备注中若含 `---`，会被完整保留（只按前两个分隔符切分）
+ * - 空条目、缺 key 的条目会被跳过
+ *
+ * @returns 解析出的三元组数组（可能为空）。
+ */
+export function parseBatchImport(text: string): { value: string; cookie?: string; label?: string }[] {
+    const out: { value: string; cookie?: string; label?: string }[] = [];
+    for (const raw of text.split(";")) {
+        const seg = raw.trim();
+        if (!seg) {
+            continue;
+        }
+        const parts = seg.split("---");
+        const value = (parts[0] ?? "").trim();
+        if (!value) {
+            continue;
+        }
+        const cookie = (parts[1] ?? "").trim() || undefined;
+        // Re-join the remainder so a label containing "---" survives intact.
+        const label = parts.slice(2).join("---").trim() || undefined;
+        out.push({ value, cookie, label });
+    }
+    return out;
+}
+
+/**
+ * 批量导入流程：单行文本输入，格式 `key---cookie---备注;key---cookie---备注;`。
+ *
+ * 解析后先弹确认框（列出脱敏条目），确认后 `addApiKeys` 一次性写入；
  * 已存在的 key 自动更新 cookie（不重复添加）。
  */
 export async function batchImportFlow(ctx: KeyManagerContext): Promise<void> {
-    interface ImportTriple {
-        value: string;
-        cookie?: string;
-        label?: string;
+    const input = await vscode.window.showInputBox({
+        title: l10n("Import API Keys (batch)"),
+        prompt: l10n("Format: key---cookie---label;key---cookie---label; (leave a field empty if unused)"),
+        placeHolder: "sk_xxx---sess_yyy---work;sk_zzz------backup;",
+        ignoreFocusOut: true,
+    });
+    if (input === undefined || !input.trim()) {
+        return;
     }
-    const pending: ImportTriple[] = [];
 
-    // Render current pending list + actions
-    const renderImport = (): vscode.QuickPickItem[] => {
-        const items: (vscode.QuickPickItem & { action?: string; index?: number })[] = [];
-        if (pending.length === 0) {
-            items.push({ label: l10n("No entries yet — click below to add a triple"), kind: vscode.QuickPickItemKind.Separator });
-        } else {
-            pending.forEach((t, i) => {
-                items.push({
-                    label: `${maskApiKey(t.value)}${t.label ? ` (${t.label})` : ""}`,
-                    description: t.cookie ? `$(key) ${maskCookie(t.cookie)}` : l10n("Cookie not bound"),
-                    action: "remove",
-                    index: i,
-                });
-            });
-        }
-        items.push({ label: "", kind: vscode.QuickPickItemKind.Separator });
-        items.push({ label: `$(plus) ${l10n("Add a triple (key/cookie/label)")}`, action: "addTriple" });
-        if (pending.length > 0) {
-            items.push({ label: `$(check) ${l10n("Finish import")}`, action: "finish" });
-            items.push({ label: `$(trash) ${l10n("Remove entry")}`, action: "remove" });
-        }
-        items.push({ label: `$(arrow-left) ${l10n("Cancel import")}`, action: "cancel" });
-        return items;
-    };
+    const entries = parseBatchImport(input);
+    if (entries.length === 0) {
+        vscode.window.showWarningMessage(l10n("No valid entries found"));
+        return;
+    }
 
+    // Confirmation preview (masked) so a malformed paste is caught before writing.
+    const preview = entries
+        .map((e) => `${maskApiKey(e.value)}${e.label ? ` (${e.label})` : ""}${e.cookie ? `  $(key) ${maskCookie(e.cookie)}` : ""}`)
+        .join("\n");
+    const confirm = await vscode.window.showWarningMessage(
+        l10nFormat("Import {0} API key(s)?", String(entries.length)),
+        { modal: true, detail: preview },
+        l10n("Import API Keys (batch)")
+    );
+    if (confirm !== l10n("Import API Keys (batch)")) {
+        return;
+    }
+
+    const { added, updated } = await addApiKeys(ctx.secrets, entries);
+    if (added > 0 || updated > 0) {
+        vscode.window.showInformationMessage(
+            l10nFormat("Imported {0} API keys ({1} cookies updated)", String(added), String(updated))
+        );
+    } else {
+        vscode.window.showInformationMessage(l10n("No changes (keys already exist with same cookies)"));
+    }
+}
+
+/**
+ * 删除 key 流程：多选 + 循环，直到用户返回。
+ *
+ * - 支持一次勾选多个 key（`canPickMany`）
+ * - 删除后**停留在本界面**并刷新列表，可继续删除
+ * - 提供「返回」项；按 ESC 或选中「返回」即回到主菜单
+ */
+export async function deleteKeysFlow(ctx: KeyManagerContext): Promise<void> {
     while (true) {
-        const picked = await vscode.window.showQuickPick(renderImport(), {
-            title: l10n("Import API Keys (batch)"),
-            placeHolder: l10n("Add triples, then finish import"),
+        const store = await getApiKeyStore(ctx.secrets);
+        if (store.keys.length === 0) {
+            vscode.window.showInformationMessage(l10n("No API keys configured"));
+            return;
+        }
+        const items: (vscode.QuickPickItem & { action?: string; index?: number })[] = [
+            ...(await buildKeyQuickPickItems(store, ctx.getLoginToken, "delete")),
+            { label: "", kind: vscode.QuickPickItemKind.Separator },
+            { label: `$(arrow-left) ${l10n("Back")}`, action: "back" },
+        ];
+
+        const picked = await vscode.window.showQuickPick(items, {
+            title: l10n("Delete API Key"),
+            placeHolder: l10n("Select one or more keys to delete (Esc to go back)"),
+            canPickMany: true,
             ignoreFocusOut: true,
         });
-        if (!picked) {
-            return; // canceled
+        // Esc / nothing selected → back to the main menu.
+        if (!picked || picked.length === 0) {
+            return;
         }
-        const action = (picked as { action?: string }).action;
-        const index = (picked as { index?: number }).index;
+        // "Back" selected → back to the main menu.
+        if (picked.some((p) => (p as { action?: string }).action === "back")) {
+            return;
+        }
 
-        if (action === "addTriple") {
-            // Input key
-            const key = await vscode.window.showInputBox({
-                title: l10n("Add a triple (key/cookie/label)"),
-                prompt: l10n("Enter the API key"),
-                ignoreFocusOut: true,
-                password: true,
-            });
-            if (key === undefined || !key.trim()) {
-                continue;
-            }
-            // Input cookie (optional)
-            const cookie = await vscode.window.showInputBox({
-                title: l10n("Add a triple (key/cookie/label)"),
-                prompt: l10n("Enter the tr_session cookie (optional)"),
-                ignoreFocusOut: true,
-                password: true,
-            });
-            if (cookie === undefined) {
-                continue;
-            }
-            // Input label (optional)
-            const label = await vscode.window.showInputBox({
-                title: l10n("Add a triple (key/cookie/label)"),
-                prompt: l10n("Enter an optional label (optional)"),
-                ignoreFocusOut: true,
-            });
-            if (label === undefined) {
-                continue;
-            }
-            pending.push({
-                value: key.trim(),
-                cookie: cookie.trim() || undefined,
-                label: label.trim() || undefined,
-            });
-        } else if (action === "remove" && typeof index === "number") {
-            pending.splice(index, 1);
-        } else if (action === "finish") {
-            if (pending.length === 0) {
-                return;
-            }
-            const { added, updated } = await addApiKeys(ctx.secrets, pending);
-            if (added > 0 || updated > 0) {
-                vscode.window.showInformationMessage(
-                    l10nFormat("Imported {0} API keys ({1} cookies updated)", String(added), String(updated))
-                );
-            } else {
-                vscode.window.showInformationMessage(l10n("No changes (keys already exist with same cookies)"));
-            }
-            return;
-        } else if (action === "cancel") {
+        const indices = picked
+            .map((p) => (p as { index?: number }).index)
+            .filter((i): i is number => typeof i === "number")
+            // Descending order so earlier removals don't shift later indices.
+            .sort((a, b) => b - a);
+        if (indices.length === 0) {
             return;
         }
+
+        const names = indices.map((i) => maskApiKey(store.keys[i].value)).join(", ");
+        const confirm = await vscode.window.showWarningMessage(
+            l10nFormat("Confirm delete {0} API key(s)?", String(indices.length)),
+            { modal: true, detail: names },
+            l10n("Delete API Key")
+        );
+        if (confirm !== l10n("Delete API Key")) {
+            continue; // stay in the delete screen
+        }
+        for (const idx of indices) {
+            await removeApiKey(ctx.secrets, idx);
+        }
+        vscode.window.showInformationMessage(l10nFormat("Deleted {0} API key(s)", String(indices.length)));
+        // Loop again to show the refreshed list.
     }
 }
 

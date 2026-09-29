@@ -8,12 +8,10 @@
  * 各交互流程见 `apiKeyFlows.ts`。
  */
 import * as vscode from "vscode";
-import { l10n, l10nFormat } from "../core/localize";
+import { l10n } from "../core/localize";
 import {
     getApiKeyMode,
     getApiKeyStore,
-    maskApiKey,
-    removeApiKey,
     resetExhaustedKeys,
     setActiveKey,
     setKeyCookie,
@@ -23,6 +21,7 @@ import {
     addKeyFlow,
     batchImportFlow,
     bindCookieFlow,
+    deleteKeysFlow,
     editKeyFlow,
     pickKey,
     showCheckMenu,
@@ -106,19 +105,7 @@ export async function showApiKeyManager(context: vscode.ExtensionContext): Promi
                 break;
             }
             case "delete": {
-                const keyPick = await pickKey(ctx, l10n("Delete API Key"));
-                if (!keyPick) {
-                    break;
-                }
-                const confirm = await vscode.window.showWarningMessage(
-                    l10nFormat("Confirm delete API key {0}?", maskApiKey(keyPick.entry.value)),
-                    { modal: true },
-                    l10n("Delete API Key")
-                );
-                if (confirm === l10n("Delete API Key")) {
-                    await removeApiKey(ctx.secrets, keyPick.index);
-                    vscode.window.showInformationMessage(l10n("API key deleted"));
-                }
+                await deleteKeysFlow(ctx);
                 break;
             }
             case "setActive": {

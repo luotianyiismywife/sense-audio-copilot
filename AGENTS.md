@@ -36,7 +36,7 @@
 | **流式推理** | 支持 SSE (Server-Sent Events) 流式响应，实时输出文本和工具调用 |
 | **Thinking/推理** | 支持模型的推理过程展示 ("thinking" 状态)，包括 XML think 块解析 |
 | **工具调用 (Tool Calling)** | 支持 VS Code 的 LanguageModelToolCallPart 机制 |
-| **图片代理 (Tool-based)** | 为不支持视觉的模型注入 `ask_image` 工具，模型可自主选择调用视觉模型（默认 Kimi K2.6）回答关于图片的具体问题，支持两轮 API 请求完成"调用工具→提问→获取答案→继续回答"的完整流程。与旧版 `describe_image` 不同，`ask_image` 允许模型针对图片提出具体问题（如"按钮是什么颜色？"），视觉模型会针对性回答。视觉模型 ID、查询提示词和思考模式均可通过设置配置；视觉代理会在同一个 thinking 块中显示“正在根据图片提问：[问题]”并实时追加视觉模型流式输出。**跨轮视觉历史持久化（v1.8.0）**：每轮视觉代理完成后输出私有 MIME（`application/vnd.opencodego.vision-tool-history+json`）的 `LanguageModelDataPart`，VS Code 自动带入下一轮对话；下次请求 `convertMessages`（OpenAI/Anthropic）识别该 DataPart 并重建标准 tool call + tool result 消息，模型不会忘记之前看过的图片 |
+| **图片代理 (Tool-based)** | 为不支持视觉的模型注入 `ask_image` 工具，模型可自主选择调用视觉模型（默认 `qwen3.6-35b-a3b`）回答关于图片的具体问题，支持两轮 API 请求完成"调用工具→提问→获取答案→继续回答"的完整流程。与旧版 `describe_image` 不同，`ask_image` 允许模型针对图片提出具体问题（如"按钮是什么颜色？"），视觉模型会针对性回答。视觉模型 ID、查询提示词和思考模式均可通过设置配置；视觉代理会在同一个 thinking 块中显示“正在根据图片提问：[问题]”并实时追加视觉模型流式输出。**跨轮视觉历史持久化（v1.8.0）**：每轮视觉代理完成后输出私有 MIME（`application/vnd.opencodego.vision-tool-history+json`）的 `LanguageModelDataPart`，VS Code 自动带入下一轮对话；下次请求 `convertMessages`（OpenAI/Anthropic）识别该 DataPart 并重建标准 tool call + tool result 消息，模型不会忘记之前看过的图片 |
 | **上下文窗口声明** | `maxInputTokens` 按真实上下文窗口的**可配置比例**声明（内置模型与自动发现模型均适用，默认 `1.0` 即完整窗口，可通过设置 `senseaudio.maxInputTokensRatio` 调整，范围 0.1–1.0，**建议 0.8**）。VS Code agent 模式的自动压缩（`chat.summarizeAgentConversationHistory.enabled`，约在 `maxInputTokens` 的 90% 触发）在比例 0.8 时于真实上下文的约 **72%** 处触发，避免按完整上下文（如 1M token）声明时压缩永不触发的问题。`context_length` / `max_completion_tokens` 保持真实值不变（用于 API 请求体） |
 | **Token 计数** | 使用 `o200k_base` tiktoken 分词器精确统计 token 用量 |
 | **状态栏** | 实时显示当前会话 token 使用量、累计用量、缓存命中率 |
@@ -51,40 +51,43 @@
 | **请求延迟** | 可配置的请求间隔延迟，避免触发 API 限流 |
 | **超时控制** | 可配置的请求超时时间（默认 10 分钟） |
 | **立即取消** | 取消请求时通过 `reader.cancel()` 立即中断流式读取，停止后台接收 |
-| **视觉代理配置** | 支持通过设置 `senseaudio.visionProxyModel`、`senseaudio.visionProxyThinking` 配置图片代理所使用的视觉模型和思考模式。`senseaudio.visionProxyThinking` 默认关闭，关闭时内部请求通过 `modelOptions.thinking={ type: "disabled" }` / `reasoning_effort="disabled"` 禁用视觉模型思考，最终 OpenAI 兼容请求体发送 `thinking: { type: "disabled" }`。**视觉模型仅从本供应商（senseaudio）查找**（`findVisionModel` 多级回退匹配裸 ID/完整 ID，修复 issue #3——`selectChatModels` 裸 ID 精确匹配带 vendor 前缀的完整 identifier 会落空）。**视觉代理模型动态选择**：`senseaudio.setVisionProxyModel` 命令从 `/v1/models` 动态加载 `supports_vision=true` 的模型列表（实测含 kimi-k2.5/k2.6/k2.7-code、qwen3.8-max、seed-2.1-turbo/pro），QuickPick 选择代替手填；API 不可用时回退手填 |
+| **视觉代理配置** | 支持通过设置 `senseaudio.visionProxyModel`（默认 `qwen3.6-35b-a3b`）、`senseaudio.visionProxyThinking` 配置图片代理所使用的视觉模型和思考模式。`senseaudio.visionProxyThinking` 默认关闭，关闭时内部请求通过 `modelOptions.thinking={ type: "disabled" }` / `reasoning_effort="none"` 禁用视觉模型思考，最终 OpenAI 兼容请求体发送 `thinking: { type: "disabled" }`。**视觉模型仅从本供应商（senseaudio）查找**（`findVisionModel` 多级回退匹配裸 ID/完整 ID，修复 issue #3——`selectChatModels` 裸 ID 精确匹配带 vendor 前缀的完整 identifier 会落空）。**视觉代理模型动态选择**：`senseaudio.setVisionProxyModel` 命令从 `/v1/models` 动态加载视觉模型列表（**视觉能力经 models.dev 判定**，见 `models/visionModels.ts`——`/v1/models` 不返回 `supports_vision`），QuickPick 选择代替手填；API 不可用时回退手填 |
 | **安装欢迎页 (Walkthrough)** | 引导向导（3 个步骤：设置 API Key、显示模型、高级设置），**仅可手动打开**（命令面板 → Welcome: Open Walkthrough）。**不再自动弹出**（2026-09-18 移除首次安装自动打开逻辑——未配置 key 时启动/请求均静默，不弹任何引导界面） |
 
 ### 1.3 模型清单
 
 > **自动模型发现**（默认开启）会从 API 获取当前可用模型列表，自动隐藏不在列表中的内置模型，并从 models.dev 自动添加 API 返回的新模型。以下为全量内置模型定义，实际显示情况取决于 API 可用性。
 
-#### 内置模型
+> ⚠️ **2026-09-29 全量核实**：平台模型列表已**完全换代**。旧清单（kimi-k2.5/k2.6/k2.7-code、glm-5/5.1/5.2/5.3、deepseek-v4-pro/flash、mimo-v2.5-pro、minimax-m2.5/m2.7、qwen3.7-max、qwen3.8-max）**全部下架**（`chat.openapi.json` 的 `x-hidden-enum` 明确列出 `kimi-k2.6`、`senseaudio-vl-*`、`glm-5.2`、`minimax-m2.7` 等为隐藏模型）。内置清单已按实测重写为当前 9 个模型。
 
-| 系列 | 模型 ID | 视觉 | 推理强度选择器 | API 格式 |
-|------|---------|------|----------------|----------|
-| GLM | `glm-5.3`, `glm-5.3-flash`⁷, `glm-5.2`, `glm-5.1`, `glm-5` | ❌/✅⁷ | `禁用思考` / `高` / `最大` (5.2/5.3 系列) / `思考`（5.1/5 不支持思考切换） | OpenAI |
-| Kimi | `kimi-k2.5`, `kimi-k2.6`, `kimi-k2.7-code`¹ | ✅ | `思考`（不支持思考切换） | OpenAI |
-| DeepSeek | `deepseek-v4-pro`, `deepseek-v4-flash`, `deepseek-v4-flash-0731`³ | ❌ | `禁用思考` / `高` / `极高` | OpenAI / Responses⁵ |
-| MiMo | `mimo-v2.5-pro` | ❌ | `禁用思考` / `思考` | OpenAI |
-| MiniMax | `minimax-m2.7`, `minimax-m2.5` | ❌ | `思考`（不支持思考切换） | OpenAI |
-| Qwen | `qwen3.7-max`⁴, `qwen3.8-max`⁶ | ❌/✅⁶ | `禁用思考` / `思考` | OpenAI / Responses⁵ |
+#### 内置模型（9 个，2026-09-29 实测）
 
-> ¹ `kimi-k2.7-code` 不支持设置 Temperature/Top-p 参数。
-> ¹⁰ `kimi-k2.6` 仅接受 `top_p=0.95`（传其他值返回 400 "field TopP invalid, only 0.95 is allowed for this model"，2026-09-19 实测）。模型定义新增 `fixedTopP: 0.95`，provider 在注入 temperature/top_p 后自动覆盖用户/预设配置的 top_p。
-> ² GLM-5.2 支持通过 reasoning_effort 设置 thinking 强度 (high/max)，GLM-5.1/GLM-5 不支持 thinking 切换。
-> ³ `deepseek-v4-flash-0731` 同时支持 OpenAI 与 Responses 协议（supports_responses=true）。
-> ⁴ `qwen3.7-max` 仅支持 OpenAI/Responses 协议（supports_anthropic=false）。
-> ⁵ Responses 能力**动态探测**：启动时读取 `/v1/models` 的 `supports_responses` 标记，不硬编码模型 ID——未来任何模型获得 Responses 支持都会自动生效。协议**默认关闭**（`enableResponsesApi=false`），默认使用 OpenAI 兼容格式。
-> ⁶ `qwen3.8-max`（测试中）支持文本与图像输入（视觉 ✅），1M 上下文 / 131.1K 输出，原生支持 Responses API。
+| 系列 | 模型 ID | 视觉 | 上下文 / 最大输出 | 推理强度选择器 |
+|------|---------|------|------------------|----------------|
+| SenseAudio | `senseaudio-s2` | ❌ | 1M / 128K | `禁用思考` / `思考` |
+| SenseAudio | `senseaudio-s2-flash` | ❌ | 256K / 64K | `禁用思考` / `思考` |
+| SenseAudio | `senseaudio-s2-lite` | ❌ | 256K / 64K | `禁用思考` / `思考` |
+| SenseNova | `sensenova-6.8-flash-lite` | ❌ | 256K / 64K¹ | `禁用思考` / `思考` |
+| Qwen | `qwen3.8-27b` | ✅ | 256K / 32K | `禁用思考` / `思考` |
+| Qwen | `qwen3.6-35b-a3b` | ✅ | 256K / 64K | `禁用思考` / `思考` |
+| DeepSeek | `deepseek-v4.1-flash` | ✅ | 1M / 384K | `禁用思考` / `思考` |
+| DeepSeek | `deepseek-v4-flash-0731` | ❌ | 1M / 384K | `禁用思考` / `思考` |
+| GLM | `glm-5.3-flash` | ✅ | 1M / 128K | `禁用思考` / `思考` |
 
-> ⁷ `glm-5.3-flash`（2026-09-03 内置化）支持文本与图像输入（视觉 ✅），1M 上下文 / 131K 输出，支持思考切换；`glm-5.3` 为纯文本版本，规格相同。
+> ¹ 官方文档对该模型的所有规格列均为 `—`，且 models.dev / OpenRouter 均未收录；暂按同类模型（S2-Flash/Lite）假定 256K / 64K，待平台公布真实值后修正。
 
-> 模型清单来源于 [SenseAudio 模型页](https://docs.senseaudio.cn/guides/account/model-list-billing)。图片生成模型（`qwen-image-2.0`、`wan2.7-image`）不适用于 Chat，已排除。
+> **规格来源**：`/v1/models` **不返回任何规格字段**（字段集仅 `id / display_name / mode / protocols / desc / created / owned_by`，无 `context_length`、`max_completion_tokens`、`supports_*`）。上下文/输出上限取自[官方模型页](https://docs.senseaudio.cn/guides/account/model-list)表格；视觉能力取自 models.dev（与 OpenRouter `architecture.input_modalities` 交叉验证，两者对全部 5 个收录模型判定一致）。
+
+> **思考强度档位**：官方 API **不返回**每模型支持的档位。唯一权威来源是 Anthropic Messages 规范（`messages.openapi.json`）的 `BetaOutputConfig.effort` 枚举 `["low","medium","high","xhigh","max"]`；`chat.openapi.json` / `responses.openapi.json` 完全未文档化 `reasoning_effort`。因此所有内置模型统一只提供 `禁用思考` / `思考` 两档，不暴露具体强度（避免对不支持的模型发送非法值）。
+
+> **协议能力**：9 个模型的 `protocols` 均为 `["chat_completions","responses","messages"]`，即全部支持三协议。Responses/Anthropic 能力仍为**动态探测**（启动时读 `/v1/models` 的 `protocols` 推导），不硬编码模型 ID。
+
+> 图片生成模型（`senseaudio-image-2.0`、`doubao-seedream-5-0`、`sensenova-u1-fast`）不适用于 Chat，已排除。
 
 在模型选择器中，内置模型归入 `SenseAudio` 分组（`family="SenseAudio"`）。
 
 > 所有模型在模型选择器中均显示**一个条目**，通过**推理强度选择器**（中文标签）切换思考模式。  
-> - `thinkingMode="switchable"`：用户可选择`禁用思考`、`自动`或启用思考（强度可配置）  
+> - `thinkingMode="switchable"`：用户可选择`禁用思考`或启用思考（强度可配置）  
 > - `thinkingMode="adaptive"`：仅`禁用思考`和`自动`两档选择，无强制启用思考选项  
 > - `thinkingMode="always"`：推理始终启用，选择器中不显示`禁用思考`选项（模型特性）  
 > 
@@ -489,6 +492,7 @@ src/
 │   ├── models.ts                         # 内置模型定义清单
 │   ├── modelsDev.ts                      # models.dev 元数据拉取与查询
 │   ├── apiModelList.ts                   # API 模型列表获取（/v1/models）
+│   ├── visionModels.ts                   # 视觉能力判定（models.dev + 硬编码兜底）
 │   ├── modelSync.ts                      # 启动模型同步（每日一次，一行日志）
 │   └── provideModel.ts                   # 模型信息提供函数（含自动发现）
 ├── commands/                             # 命令与 QuickPick UI
@@ -563,6 +567,7 @@ test/                                     # 测试脚本（运行前需 npm run 
 ├── test-transient-retry.mjs              # 瞬态错误分类测试（18 项断言，含 500 不换 key 回归）
 ├── test-vision-history.mjs               # 跨轮视觉历史编解码 + 双 API 转换器闭环测试
 ├── test-anthropic-tool-result-merge.mjs  # Anthropic 连续工具结果合并测试（issue #87 场景）
+├── test-batch-import.mjs                 # 批量导入解析器测试（14 项断言）
 ├── test-apply-token.mjs                  # 令牌应用测试
 ├── test-banned-detect.mjs                # 封号检测测试
 ├── test-banned-rotation.mjs              # 封号轮换测试
@@ -608,17 +613,18 @@ test/                                     # 测试脚本（运行前需 npm run 
 | `balance/accountInfo.ts` | ~200 | 平台用户中心账号信息：`queryAccountInfo`（`GET platform.senseaudio.cn/api/user/self`，Bearer PASETO token）、`getAccountInfoWithStatus`（带状态：ok/unauthorized/error）、`getAccountInfoCached`（TTL 缓存）、`formatExpiryDate`（代金券到期日）、`POINTS_PER_CNY`（1 元 = 1,000,000 积分）、`AccountInfo` / `PlanUsageWindow` 类型 |
 | `balance/planUsage.ts` | ~330 | **套餐用量快照**（对标上游 `goUsage.ts`）：`buildSnapshot`（归一化 + 三态 `billingMode`）、`getPlanUsageCached`（TTL 缓存 + 失败保留旧值）、`getPlanUsageSnapshot`（同步读缓存）、`classifyWindow`（宽容匹配各平台 key 命名）、`getWindowPercent`（不截断）、`isPlanExhausted`（**只看月度额度窗口**）、`formatResetDuration` / `formatWindowLine` / `formatUsageSummary` / `formatBillingModeLine` / `formatBalanceSummary` |
 | `balance/availability.ts` | ~66 | `testKeyAvailability`（最小真实聊天请求 `say ok` + `max_tokens=8`，402→余额不足 / 401→无效） |
-| `models/models.ts` | ~265 | 16 个内置模型定义（含 glm-5.3/glm-5.3-flash，2026-09-03），模型配置查询（所有模型声明 `imageInput: true`） |
+| `models/models.ts` | ~265 | 9 个内置模型定义（2026-09-29 按实测重写），模型配置查询（所有模型声明 `imageInput: true`） |
 | `models/modelsDev.ts` | ~161 | models.dev 元数据拉取与查询：从 `models.dev/models.json` 下载并索引模型规格，支持短 ID 匹配，1 小时缓存 |
-| `models/apiModelList.ts` | ~202 | API 模型列表获取：从 `/v1/models` 拉取可用模型 ID 及能力标记（含 `supports_responses`），5 分钟缓存，静默降级 |
+| `models/apiModelList.ts` | ~190 | API 模型列表获取：从 `/v1/models` 拉取可用模型 ID 及能力标记（`supports_responses` / `supports_anthropic` 由 `protocols` 推导），5 分钟缓存，静默降级 |
+| `models/visionModels.ts` | ~90 | **视觉能力判定**（2026-09-29 新增）：`resolveVisionCapability()`（API 标记 → models.dev `attachment`/`modalities` → 硬编码兜底）、`getVisionSupportedModelIds()`（供视觉代理命令） |
 | `models/modelSync.ts` | ~83 | 启动模型同步：每日最多一次检查 API 新模型（`globalState` 记录日期），同步结果以一行日志输出到「SenseAudio」Output 通道（`models.sync` 标签），**不写文件**（v1.7.0 移除工作区 `.copilot/model-sync-log.md`，见 issue #1），无 Key/API 不可用记录失败且不标记已同步 |
 | `models/provideModel.ts` | ~280 | 模型信息提供函数（含自动发现）：**先读 `enableAutoModelDiscovery` 开关**（关闭则直接用内置列表）、过滤内置模型、从 API 和 models.dev 自动发现新增模型、按 apiMode 过滤 |
 | `commands/registerCommands.ts` | ~130 | 注册全部 12 条命令（setApiKey / manageApiKeys / setVisionProxyModel / getApiKey / openSettings / generateGitCommitMessage / abortGitCommitMessage / setModelPreset / syncPush / syncPull / checkUsage）+ `onDidChangeConfiguration` 监听（apiMode / enableAutoModelDiscovery 变化时刷新模型列表） |
 | `commands/apiKeyManagerUi.ts` | ~171 | `showApiKeyManager()` 主入口：**仅渲染主菜单 + 分发动作**（增删/批量导入/设为当前（仅 single 模式）/绑定 cookie/重置失效/检测可用性/编辑 key）；具体流程委托 `apiKeyFlows.ts`，展示委托 `apiKeyDisplay.ts` |
 | `commands/apiKeyDisplay.ts` | ~138 | **key 展示辅助**（2026-09-28 新增，纯函数）：`formatBalanceDetailText`（余额格式化）、`fetchAccountInfo`（TTL 缓存查询）、`buildKeyDetailLine`（单 key 详情行）、`buildKeyQuickPickItems`（key 列表 QuickPick 项）。主界面 / key 选择界面 / 检测二级界面共用，展示逻辑只写一处 |
-| `commands/apiKeyFlows.ts` | ~432 | **key 管理交互流程**（2026-09-28 新增）：`KeyManagerContext` 接口 + `queryBalanceFlow` / `addKeyFlow` / `batchImportFlow` / `pickKey` / `checkAvailabilityFlow` / `checkAllAvailabilityFlow` / `showCheckMenu` / `bindCookieFlow` / `editKeyFlow` |
+| `commands/apiKeyFlows.ts` | ~470 | **key 管理交互流程**（2026-09-28 新增）：`KeyManagerContext` 接口 + `queryBalanceFlow` / `addKeyFlow` / `parseBatchImport` / `batchImportFlow`（`key---cookie---备注;` 单行格式）/ `deleteKeysFlow`（多选 + 循环 + 返回）/ `pickKey` / `checkAvailabilityFlow` / `checkAllAvailabilityFlow` / `showCheckMenu` / `bindCookieFlow` / `editKeyFlow` |
 | `commands/checkUsageCommand.ts` | ~60 | `checkUsageCommand()`：强制刷新套餐用量（绕过 TTL）并弹窗展示三窗口使用率 + 余额；区分未配置 token / 401 失效 / 一般失败三种错误 |
-| `commands/visionProxyCommand.ts` | ~68 | `setVisionProxyModelCommand()`：从 `/v1/models` 动态加载 `supports_vision=true` 模型供 QuickPick 选择，API 不可用时回退手填 |
+| `commands/visionProxyCommand.ts` | ~80 | `setVisionProxyModelCommand()`：从 `/v1/models` 动态加载视觉模型列表（视觉能力经 `models/visionModels.ts` 判定）供 QuickPick 选择，desc 作 tooltip；无视觉模型时提示检查 Key/网络；API 不可用时回退手填 |
 | `commands/modelPresetCommand.ts` | ~108 | `setModelPresetCommand()`：命名预设（Precise/Balanced/Creative）与自定义 temperature/top_p 输入 |
 | `core/logger.ts` | ~43 | 日志输出 (LogOutputChannel) |
 | `core/localize.ts` | ~213 | 中英文国际化 |
@@ -706,7 +712,13 @@ test/                                     # 测试脚本（运行前需 npm run 
 添加单个 key 流程（依次输入 key → cookie → label 三元组）。重复值提示已存在并返回 false。
 
 #### `batchImportFlow(ctx): Promise<void>`
-批量导入流程：表单式逐条输入 (key/cookie/label) 三元组，Finish 时 `addApiKeys` 一次性写入；已存在的 key 自动更新 cookie（不重复添加）。
+批量导入流程：**单行文本输入**，格式 `key---cookie---备注;key---cookie---备注;`（字段可留空，末尾分号可省略）。经 `parseBatchImport` 解析后弹确认框（列出脱敏条目），确认后 `addApiKeys` 一次性写入；已存在的 key 自动更新 cookie（不重复添加）。
+
+#### `parseBatchImport(text): { value, cookie?, label? }[]`
+解析批量导入文本。按 `;` 分条、按 `---` 分字段（key / cookie / 备注）；空条目与缺 key 的条目跳过；备注中的 `---` 通过 `parts.slice(2).join("---")` 完整保留。纯函数，有 14 项断言测试（`test/test-batch-import.mjs`）。
+
+#### `deleteKeysFlow(ctx): Promise<void>`
+删除 key 流程：**多选 + 循环**。`canPickMany` 一次勾选多个 key；删除后**停留在本界面**并刷新列表（可继续删）；提供「返回」项，按 ESC 或选中「返回」回到主菜单。删除按索引**降序**执行，避免前面的删除导致后面索引偏移。
 
 #### `pickKey(ctx, title): Promise<{ index, entry } | undefined>`
 选择一个 key（删除/设为当前/编辑/绑定/清除 cookie 共用）。复用主界面同款 QuickPick 项（`buildKeyQuickPickItems`），让用户在删除/编辑前能区分各个 key。
@@ -731,7 +743,7 @@ test/                                     # 测试脚本（运行前需 npm run 
 ### 4.1c `src/commands/visionProxyCommand.ts`
 
 #### `setVisionProxyModelCommand(context): Promise<void>`
-视觉代理模型选择命令（`senseaudio.setVisionProxyModel`）。从 `/v1/models` 动态加载 `supports_vision=true` 的模型列表供 QuickPick 选择，API 不可用时回退到手动输入。
+视觉代理模型选择命令（`senseaudio.setVisionProxyModel`）。从 `/v1/models` 动态加载视觉模型列表（视觉能力经 `models/visionModels.ts` 的 `getVisionSupportedModelIds` 判定——`/v1/models` 不返回 `supports_vision`）供 QuickPick 选择，`desc` 作 tooltip；无视觉模型时显示 `$(warning) 未检测到支持视觉的模型` 提示检查 Key/网络；API 不可用时回退手填。
 
 ---
 
@@ -748,7 +760,7 @@ test/                                     # 测试脚本（运行前需 npm run 
 应用推理强度（thinking 模式）到模型配置。`"disabled"` → 关闭思考（`thinkingMode="always"` 的模型除外）；`"enabled"` → 开启思考使用默认力度；`"adaptive"`/`"high"`/`"max"` 等 → 开启思考并指定力度。
 
 #### `applyTemperature(um, config): void`
-注入 temperature / top_p（模型预设或自定义设置）。模型声明 `supportsTemperature === false` 时清空两者；模型声明 `fixedTopP`（如 kimi-k2.6 仅接受 0.95）时覆盖用户/预设配置。
+注入 temperature / top_p（模型预设或自定义设置）。模型声明 `supportsTemperature === false` 时清空两者；模型声明 `fixedTopP`（如某模型仅接受 0.95）时覆盖用户/预设配置。**默认值**：`modelPreset` 默认 `custom`，`temperature` 默认 `1`，`top_p` 默认 `0.5`（用户不手动设置时生效）。预设模式下若预设定义了 `top_p` 则用预设值，否则回退到配置的 `top_p`（保证预设/自定义两种模式行为一致）。
 
 #### `resolveApiMode(modelId, config): "openai" | "anthropic" | "responses"`
 确定本次请求使用的 API 协议。`senseaudio.apiMode` 用户设置优先（强制）；`auto` 时按能力动态探测（启动时从 `/v1/models` 缓存，不硬编码模型 ID）：`enableResponsesApi` + supports_responses → responses；`enableAnthropicApi` + supports_anthropic → anthropic；否则 openai。
@@ -937,7 +949,7 @@ key 轮换失败原因 → 人类可读标签（l10n key）：`balance`/`invalid
 | `supportedReasoningEfforts` | `string[]` (可选) | 支持的推理力度选项 |
 | `includeReasoningInRequest` | `boolean` (可选) | 是否在 assistant 消息中包含 reasoning_content |
 | `supportsTemperature` | `boolean` (可选) | 是否支持设置 temperature/top_p，默认 true |
-| `fixedTopP` | `number` (可选) | 模型仅接受的固定 top_p 值（如 kimi-k2.6 仅允许 0.95），provider 自动覆盖用户/预设配置的 top_p |
+| `fixedTopP` | `number` (可选) | 模型仅接受的固定 top_p 值（如某模型仅允许 0.95），provider 自动覆盖用户/预设配置的 top_p |
 | `contextLength` | `number` (可选) | 默认上下文长度 |
 | `maxTokens` | `number` (可选) | 默认最大输出 Token |
 | `extra` | `Record<string, unknown>` (可选) | 额外的请求体参数 |
@@ -1122,14 +1134,28 @@ API 实现的抽象基类。
 #### `getAnthropicSupportedModelIds(apiKey): Promise<Set<string>>`
 从缓存的 `/v1/models` 元数据中筛选 `supports_anthropic=true` 的模型 ID 集。供 `provideModel.ts` 在启动时缓存为动态标记（`getAnthropicModelIds()`），由 provider 在 auto 模式下查询决定是否使用 Anthropic 协议。
 
-#### `getVisionSupportedModelIds(apiKey): Promise<Set<string>>`
-从缓存的 `/v1/models` 元数据中筛选 `supports_vision=true` 的模型 ID 集。供 `extension.ts` 的 `senseaudio.setVisionProxyModel` 命令动态加载视觉模型列表（QuickPick 选择代替手填）。
-
 #### `getApiModelMetadataList(apiKey): Promise<ApiModelMetadata[]>`（2026-09-03 新增）
-返回缓存的 `/v1/models` **完整元数据列表**（含 `context_length` / `max_completion_tokens` / `supports_vision` / `supports_reasoning` / `supports_tools` 等字段）。供 `provideModel.ts` 自动发现流程作为新模型规格的**主数据源**——平台自己的元数据比 models.dev 更准更新（models.dev 目录可能滞后或未收录 SenseAudio 条目，拉取失败时曾把自动发现模型规格降级到 128K/4096 兜底）。查询失败返回空列表（静默降级）。
+返回缓存的 `/v1/models` **完整元数据列表**。供 `provideModel.ts` 自动发现流程作为新模型规格的**主数据源**——平台自己的元数据比 models.dev 更准更新（models.dev 目录可能滞后或未收录 SenseAudio 条目，拉取失败时曾把自动发现模型规格降级到 128K/4096 兜底）。查询失败返回空列表（静默降级）。
+
+> ⚠️ **实测（2026-09-29）**：`/v1/models` **不返回任何规格/能力字段**——字段集仅 `id / display_name / mode / protocols / desc / created / owned_by`。`supports_responses` / `supports_anthropic` 由 `protocols` 数组推导；`supports_vision` / `context_length` / `max_completion_tokens` **恒为 undefined**（视觉能力改由 `models/visionModels.ts` 判定）。
 
 #### `isApiFetchSuccessful(): boolean`
 返回最近一次 API 模型列表拉取是否成功。用于模型提供者决定是否应用 API 过滤。
+
+---
+
+### 4.5b `src/models/visionModels.ts`（2026-09-29 新增）
+
+#### `resolveVisionCapability(modelId, apiMeta, devEntry): boolean`
+判定模型是否接受图片输入。解析顺序（首个命中即返回）：
+1. `/v1/models` 的 `supports_vision`（平台当前不返回，但若将来返回则自动生效）
+2. models.dev：`attachment === true` 或 `modalities.input` 含 `"image"`；`attachment === false` 则判否
+3. 硬编码兜底 `HARDCODED_VISION`（SenseAudio 自研模型，两处目录均未收录）——默认 `false`（纯文本），未知模型走 ask_image 代理而非直接发图失败
+
+#### `getVisionSupportedModelIds(apiKey): Promise<Set<string>>`
+返回视觉模型 ID 集，供 `senseaudio.setVisionProxyModel` 命令的 QuickPick 使用。组合缓存的 `/v1/models` 列表与 models.dev 元数据，反映平台**当前**模型集（非硬编码列表）。`/v1/models` 为空时返回空集。
+
+> **实测判定结果（2026-09-29）**：视觉 ✅ = `qwen3.8-27b`、`qwen3.6-35b-a3b`、`deepseek-v4.1-flash`、`glm-5.3-flash`；纯文本 ❌ = `senseaudio-s2` / `-flash` / `-lite`、`sensenova-6.8-flash-lite`、`deepseek-v4-flash-0731`。models.dev 与 OpenRouter `architecture.input_modalities` 对全部 5 个收录模型判定一致。
 
 ---
 
@@ -1287,7 +1313,7 @@ ask_image 工具定义的 OpenAI 格式（`type: "function"`），包含 `imageI
 `"senseaudio"` — 本扩展注册语言模型的 vendor（`extension.ts` 中 `registerLanguageModelChatProvider("senseaudio", ...)`）。视觉代理**仅从本供应商**查找视觉模型，绝不跨供应商匹配同名模型（避免把图片请求路由到其他平台的同名模型，需不同授权/计费）。
 
 #### `async function findVisionModel(visionModelId): Promise<vscode.LanguageModelChat | undefined>`
-在当前供应商（`senseaudio`）内按裸模型 ID（如 `kimi-k2.6`）查找视觉模型。**修复 issue #3（2026-08-25）**：`senseaudio.visionProxyModel` 存裸 ID，而 VS Code 的 `LanguageModelChat.id` 是带 vendor 前缀的完整 identifier（`senseaudio/kimi-k2.6`），裸 `selectChatModels({ id })` 精确匹配 `metadata.id`（裸 ID）理应命中——但多 provider 环境下与 `chat.cachedLanguageModels.v2` 展示的完整 identifier 混淆导致匹配失败；本函数多级回退确保命中：① `selectChatModels({ vendor: "senseaudio", id: bareId })`（vendor + 裸 ID 精确匹配）；② 扫描本供应商全部模型按完整 ID / 裸 ID 后缀 / 名称匹配。配置值同时支持裸 ID 与完整 ID（`senseaudio/kimi-k2.6`，自动剥去 vendor 前缀）。
+在当前供应商（`senseaudio`）内按裸模型 ID（如 `qwen3.6-35b-a3b`）查找视觉模型。**修复 issue #3（2026-08-25）**：`senseaudio.visionProxyModel` 存裸 ID，而 VS Code 的 `LanguageModelChat.id` 是带 vendor 前缀的完整 identifier（`senseaudio/qwen3.6-35b-a3b`），裸 `selectChatModels({ id })` 精确匹配 `metadata.id`（裸 ID）理应命中——但多 provider 环境下与 `chat.cachedLanguageModels.v2` 展示的完整 identifier 混淆导致匹配失败；本函数多级回退确保命中：① `selectChatModels({ vendor: "senseaudio", id: bareId })`（vendor + 裸 ID 精确匹配）；② 扫描本供应商全部模型按完整 ID / 裸 ID 后缀 / 名称匹配。配置值同时支持裸 ID 与完整 ID（`senseaudio/qwen3.6-35b-a3b`，自动剥去 vendor 前缀）。
 
 #### `callVisionModel(imageData, mimeType, visionModelId, query, token, progress?): Promise<string>`
 调用视觉模型回答关于图片的查询。使用 `findVisionModel`（本供应商内按裸 ID/完整 ID 多级回退查找）定位模型，发送图片+查询文本，收集流式回答返回，并可通过 `progress` 实时转发 `LanguageModelTextPart`。与旧版 `describe_image` 不同，`query` 参数来自模型的 `ask_image` 工具调用，允许针对性提问（如"按钮是什么颜色？"）。支持 thinking 模式配置，通过 `senseaudio.visionProxyThinking` 设置控制，开启时发送 `reasoning_effort="high"`，关闭时发送 `reasoning_effort="disabled"`。
@@ -1773,11 +1799,11 @@ npx tsc --noEmit
 # 持续监视模式
 npm run watch
 
-# 离线测试（4 个，无需 API Key；先自动 compile）
+# 离线测试（5 个，无需 API Key；先自动 compile）
 npm test
 # 等效于: npm run compile && npm run test:offline
 npm run test:offline
-# 等效于: node test/test-plan-usage.mjs && node test/test-transient-retry.mjs && node test/test-vision-history.mjs && node test/test-anthropic-tool-result-merge.mjs
+# 等效于: node test/test-plan-usage.mjs && node test/test-transient-retry.mjs && node test/test-vision-history.mjs && node test/test-anthropic-tool-result-merge.mjs && node test/test-batch-import.mjs
 
 # 打包 VSIX
 npm run build

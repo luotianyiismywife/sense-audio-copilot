@@ -307,9 +307,9 @@ while (true):
 |---|------|------|------|
 | H1 | 空列表 | 仅显示"添加 Key"动作 | ✅ |
 | H2 | 添加 key | 输入 key（可附带 label、cookie）；重复值提示已存在 | ✅ |
-| H2b | **批量导入** | 表单式逐条输入 key/cookie/备注三元组，Finish 时 `addApiKeys` 批量添加；已存在 key 自动更新 cookie 不重复添加 | ✅ |
+| H2b | **批量导入** | 单行文本输入，格式 `key---cookie---备注;key---cookie---备注;`（字段可留空，末尾分号可省略）；`parseBatchImport` 解析后弹确认框（脱敏预览），确认后 `addApiKeys` 一次性写入；已存在 key 自动更新 cookie 不重复添加 | ✅ |
 | H2c | **编辑 key** | `editKeyFlow` 三字段（value/cookie/label）编辑，value 冲突校验 | ✅ |
-| H3 | 删除 key | 二次确认；删除 active → 调整 activeIndex；清空 → H1 | ✅ |
+| H3 | 删除 key | **多选 + 循环**：`canPickMany` 一次勾选多个；删除后停留在本界面并刷新列表；提供「返回」项，ESC 或选中「返回」回主菜单；按索引降序删除避免偏移 | ✅ |
 | H4 | 设为当前使用 | 更新 activeIndex（**仅 single 模式渲染/显示；rotation/sticky 模式隐藏**） | ✅ |
 | H5 | 绑定/更新 cookie | 选择 key → 输入 cookie | ✅ |
 | H6 | 清除 cookie | 置空 | ✅ |

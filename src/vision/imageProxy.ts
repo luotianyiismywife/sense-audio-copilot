@@ -32,14 +32,14 @@ function buildVisionOptions(): vscode.LanguageModelChatRequestOptions {
  * Find a vision-capable language model from THIS provider (senseaudio).
  *
  * The vision proxy always uses a model registered by this extension — the same
- * vendor as the main chat model — so a bare model id (e.g. "kimi-k2.6") must be
- * matched against the vendor-qualified `LanguageModelChat.id`
- * (`senseaudio/kimi-k2.6`); a plain `selectChatModels({ id })` would miss it.
+ * vendor as the main chat model — so a bare model id (e.g. "qwen3.6-35b-a3b")
+ * must be matched against the vendor-qualified `LanguageModelChat.id`
+ * (`senseaudio/qwen3.6-35b-a3b`); a plain `selectChatModels({ id })` would miss it.
  * We never fall back to other vendors' models with the same bare id, since that
  * could route image requests to a different platform (different auth/pricing).
  *
- * Accepts both a bare id ("kimi-k2.6") and a vendor-qualified id
- * ("senseaudio/kimi-k2.6") as the configured value.
+ * Accepts both a bare id ("qwen3.6-35b-a3b") and a vendor-qualified id
+ * ("senseaudio/qwen3.6-35b-a3b") as the configured value.
  */
 async function findVisionModel(visionModelId: string): Promise<vscode.LanguageModelChat | undefined> {
     const raw = visionModelId.trim();

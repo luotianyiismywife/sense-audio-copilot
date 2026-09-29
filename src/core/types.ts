@@ -54,7 +54,7 @@ export interface SenseAudioModelItem {
     thinkingMode?: "switchable" | "always" | "adaptive";
     /** Whether this model supports setting temperature/top_p. Default true. */
     supportsTemperature?: boolean;
-    /** Optional fixed top_p value the model accepts (e.g. kimi-k2.6 only allows 0.95). When set, user top_p is overridden. */
+    /** Optional fixed top_p value the model accepts (e.g. a model that only allows 0.95). When set, user top_p is overridden. */
     fixedTopP?: number;
     /** Custom HTTP headers */
     headers?: Record<string, string>;

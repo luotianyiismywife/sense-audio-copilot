@@ -23,7 +23,7 @@ interface BuiltInModelDef {
     includeReasoningInRequest?: boolean;
     /** Whether the model supports setting temperature/top_p. Default true. */
     supportsTemperature?: boolean;
-    /** Optional fixed top_p value the model accepts (e.g. kimi-k2.6 only allows 0.95). */
+    /** Optional fixed top_p value the model accepts (e.g. a model that only allows 0.95). */
     fixedTopP?: number;
     /** Default context length */
     contextLength?: number;
@@ -72,51 +72,54 @@ export function getMaxInputTokensRatio(): number {
 /**
  * Built-in model definitions.
  *
- * Model list sourced from the SenseAudio model page:
- * https://docs.senseaudio.cn/guides/account/model-list-billing
- * (deepseek-v4-flash / deepseek-v4-pro / deepseek-v4-flash-0731 / glm-5 / glm-5.1 /
- *  glm-5.2 / kimi-k2.5 / kimi-k2.6 / kimi-k2.7-code / mimo-v2.5-pro /
- *  minimax-m2.5 / minimax-m2.7 / qwen3.7-max / qwen3.8-max)
+ * Model list verified against the live `/v1/models` endpoint on 2026-09-29
+ * (9 llm models) and the official model page:
+ * https://docs.senseaudio.cn/guides/account/model-list
  *
- * Image-generation models (qwen-image-2.0 / wan2.7-image) are excluded — they
- * cannot be used for chat.
+ * IMPORTANT: `/v1/models` returns NO spec fields — only
+ * `id / display_name / mode / protocols / desc / created / owned_by`.
+ * It does NOT return `context_length`, `max_completion_tokens` or any
+ * `supports_*` capability flag. All specs below therefore come from the
+ * official docs table (context / max output) and models.dev + OpenRouter
+ * (vision capability, cross-checked and in agreement).
+ *
+ * The previous list (kimi-k2.5/k2.6/k2.7-code, glm-5/5.1/5.2/5.3,
+ * deepseek-v4-pro/flash, mimo-v2.5-pro, minimax-m2.5/m2.7, qwen3.7-max,
+ * qwen3.8-max) is entirely retired by the platform — those IDs now 404.
+ *
+ * Image-generation models (senseaudio-image-2.0, doubao-seedream-5-0, …) are
+ * excluded — they cannot be used for chat.
  */
 const BUILT_IN_MODELS: BuiltInModelDef[] = [
-    // ── DeepSeek series ── 1M context / 384K max output, supports thinking (high/max)
-    { baseId: "deepseek-v4-pro", displayName: "DeepSeek V4 Pro", vision: false, thinkingMode: "switchable", defaultReasoningEffort: "max", supportedReasoningEfforts: ["high", "max"], contextLength: 1000000, maxTokens: 393216 },
-    { baseId: "deepseek-v4-flash", displayName: "DeepSeek V4 Flash", vision: false, thinkingMode: "switchable", defaultReasoningEffort: "max", supportedReasoningEfforts: ["high", "max"], contextLength: 1000000, maxTokens: 393216 },
-    { baseId: "deepseek-v4-flash-0731", displayName: "DeepSeek V4 Flash 0731", vision: false, thinkingMode: "switchable", defaultReasoningEffort: "max", supportedReasoningEfforts: ["high", "max"], contextLength: 1000000, maxTokens: 393216 },
+    // ── SenseAudio 自研系列 ──
+    // S2: 1M context / 128K output. desc mentions 深度推理与复杂工具调用 (no vision).
+    { baseId: "senseaudio-s2", displayName: "SenseAudio-S2", vision: false, thinkingMode: "switchable", contextLength: 1000000, maxTokens: 131072 },
+    // S2-Flash / S2-Lite: 256K context / 64K output.
+    { baseId: "senseaudio-s2-flash", displayName: "SenseAudio-S2-Flash", vision: false, thinkingMode: "switchable", contextLength: 262144, maxTokens: 65536 },
+    { baseId: "senseaudio-s2-lite", displayName: "SenseAudio-S2-Lite", vision: false, thinkingMode: "switchable", contextLength: 262144, maxTokens: 65536 },
 
-    // ── GLM series ── GLM-5.2: 1M context / 128K output, supports thinking (high/max)
-    // GLM-5.1/GLM-5 do not support thinking, so thinkingMode="always" hides the toggle
-    { baseId: "glm-5.2", displayName: "GLM-5.2", vision: false, thinkingMode: "switchable", defaultReasoningEffort: "high", supportedReasoningEfforts: ["high", "max"], contextLength: 1000000, maxTokens: 131072 },
-    { baseId: "glm-5.1", displayName: "GLM-5.1", vision: false, thinkingMode: "always", contextLength: 200000, maxTokens: 131072 },
-    { baseId: "glm-5", displayName: "GLM-5", vision: false, thinkingMode: "always", contextLength: 1000000, maxTokens: 131072 },
-    // GLM-5.3 / GLM-5.3-Flash: 1M context / 128K output, thinking supported;
-    // GLM-5.3-Flash also supports vision input (2026-09-03 /v1/models confirmed)
-    { baseId: "glm-5.3", displayName: "GLM-5.3", vision: false, thinkingMode: "switchable", contextLength: 1048576, maxTokens: 131072 },
-    { baseId: "glm-5.3-flash", displayName: "GLM-5.3 Flash", vision: true, thinkingMode: "switchable", contextLength: 1048576, maxTokens: 131072 },
+    // ── SenseNova 系列 ──
+    // The official docs table lists "—" for every spec of this model, and it is
+    // absent from models.dev / OpenRouter. 256K / 64K is assumed (same class as
+    // the S2-Flash/Lite entries); revisit if the platform publishes real values.
+    { baseId: "sensenova-6.8-flash-lite", displayName: "SenseNova-6.8-Flash-Lite", vision: false, thinkingMode: "switchable", contextLength: 262144, maxTokens: 65536 },
 
-    // ── Kimi series ── 256K context, text + image input
-    { baseId: "kimi-k2.7-code", displayName: "Kimi K2.7 Code", vision: true, thinkingMode: "always", supportsTemperature: false, contextLength: 262144, maxTokens: 131072 },
-    // kimi-k2.6 only accepts top_p=0.95 (400 "field TopP invalid, only 0.95 is allowed" otherwise, 2026-09-19 tested)
-    { baseId: "kimi-k2.6", displayName: "Kimi K2.6", vision: true, thinkingMode: "always", fixedTopP: 0.95, contextLength: 262144, maxTokens: 131072 },
-    { baseId: "kimi-k2.5", displayName: "Kimi K2.5", vision: true, thinkingMode: "always", contextLength: 262144, maxTokens: 65536 },
-
-    // ── MiMo series ── 256K context / 256K max output
-    { baseId: "mimo-v2.5-pro", displayName: "MiMo-V2.5-Pro", vision: false, thinkingMode: "switchable", contextLength: 262144, maxTokens: 262144 },
-
-    // ── MiniMax series ── 200K context
-    { baseId: "minimax-m2.7", displayName: "MiniMax M2.7", vision: false, thinkingMode: "always", contextLength: 204800, maxTokens: 196608 },
-    { baseId: "minimax-m2.5", displayName: "MiniMax M2.5", vision: false, thinkingMode: "always", contextLength: 204800, maxTokens: 204800 },
-
-    // ── Qwen series ── 1M context / 131.1K max output.
-    // Note: no apiMode is hardcoded here — Responses capability is detected at
-    // startup from /v1/models (supports_responses) in provideModel.ts, so any
-    // model that gains Responses support is picked up automatically.
-    { baseId: "qwen3.7-max", displayName: "Qwen3.7 Max", vision: false, thinkingMode: "switchable", contextLength: 1000000, maxTokens: 134218 },
-    // qwen3.8-max supports text + image input (vision=true), same 1M context / 131.1K output.
-    { baseId: "qwen3.8-max", displayName: "Qwen3.8 Max", vision: true, thinkingMode: "switchable", contextLength: 1000000, maxTokens: 134218 },
+    // ── 其他厂商模型 ──
+    // Qwen3.8-27B: 256K context. Vision confirmed (models.dev attachment=true,
+    // OpenRouter input_modalities=[text,image,video]).
+    { baseId: "qwen3.8-27b", displayName: "Qwen3.8-27B", vision: true, thinkingMode: "switchable", contextLength: 262144, maxTokens: 32768 },
+    // Qwen3.6-35B-A3B: 256K context / 64K output. Vision confirmed by BOTH the
+    // API desc ("面向复杂多模态任务的视觉语言旗舰模型") and models.dev/OpenRouter.
+    { baseId: "qwen3.6-35b-a3b", displayName: "Qwen3.6-35B-A3B", vision: true, thinkingMode: "switchable", contextLength: 262144, maxTokens: 65536 },
+    // DeepSeek-V4.1-Flash: 1M context. Vision confirmed (models.dev attachment=true,
+    // OpenRouter input_modalities=[text,image]).
+    { baseId: "deepseek-v4.1-flash", displayName: "DeepSeek-V4.1-Flash", vision: true, thinkingMode: "switchable", contextLength: 1000000, maxTokens: 384000 },
+    // DeepSeek-V4-Flash-0731: 1M context / 384K output. Text-only
+    // (models.dev attachment=false, OpenRouter input_modalities=[text]).
+    { baseId: "deepseek-v4-flash-0731", displayName: "DeepSeek-V4-Flash-0731", vision: false, thinkingMode: "switchable", contextLength: 1000000, maxTokens: 393216 },
+    // GLM-5.3-Flash: 1M context / 128K output. Vision confirmed
+    // (models.dev attachment=true, OpenRouter input_modalities=[text,image,video]).
+    { baseId: "glm-5.3-flash", displayName: "GLM-5.3-Flash", vision: true, thinkingMode: "switchable", contextLength: 1000000, maxTokens: 131072 },
 ];
 
 /**

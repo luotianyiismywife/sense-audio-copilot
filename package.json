@@ -239,20 +239,20 @@
 				},
 				"senseaudio.modelPreset": {
 					"type": "string",
-					"default": "precise",
+					"default": "custom",
 					"description": "%config.modelPreset.desc%",
 					"editPresentation": "singlelineText"
 				},
 				"senseaudio.temperature": {
 					"type": "number",
-					"default": null,
+					"default": 1,
 					"minimum": 0,
 					"maximum": 2,
 					"description": "%config.temperature.desc%"
 				},
 				"senseaudio.top_p": {
 					"type": "number",
-					"default": null,
+					"default": 0.5,
 					"minimum": 0,
 					"maximum": 1,
 					"description": "%config.top_p.desc%"
@@ -328,18 +328,7 @@
 				},
 				"senseaudio.visionProxyModel": {
 					"type": "string",
-					"default": "kimi-k2.6",
-					"enum": [
-						"kimi-k2.6",
-						"senseaudio-vl-1.0-260319",
-						"senseaudio-vl-lite-1.0-260319"
-					],
-					"enumDescriptions": [
-						"%config.visionProxyModel.enum.kimi-k2.6.desc%",
-						"%config.visionProxyModel.enum.senseaudio-vl.desc%",
-						"%config.visionProxyModel.enum.senseaudio-vl-lite.desc%"
-					],
-					"editPresentation": "multilineText",
+					"default": "qwen3.6-35b-a3b",
 					"description": "%config.visionProxyModel.desc%"
 				},
 				"senseaudio.visionProxyThinking": {
@@ -523,7 +512,7 @@
 		"lint": "eslint",
 		"watch": "tsc -watch -p ./",
 		"test": "npm run compile && npm run test:offline",
-		"test:offline": "node test/test-plan-usage.mjs && node test/test-transient-retry.mjs && node test/test-vision-history.mjs && node test/test-anthropic-tool-result-merge.mjs",
+		"test:offline": "node test/test-plan-usage.mjs && node test/test-transient-retry.mjs && node test/test-vision-history.mjs && node test/test-anthropic-tool-result-merge.mjs && node test/test-batch-import.mjs",
 		"build": "node scripts/build/package-vsix.mjs",
 		"postinstall": "node scripts/build/copy-tokenizer.js"
 	},

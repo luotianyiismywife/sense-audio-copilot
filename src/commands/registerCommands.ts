@@ -78,7 +78,7 @@ export function registerCommands(
     );
 
     // Vision proxy model picker: dynamically loads vision-capable models from
-    // /v1/models (supports_vision=true) so the user can pick instead of typing
+    // /v1/models + models.dev (visionModels.ts) so the user can pick instead of typing
     // the model ID by hand. Falls back to manual input when the API is unavailable.
     context.subscriptions.push(
         vscode.commands.registerCommand("senseaudio.setVisionProxyModel", async () => {

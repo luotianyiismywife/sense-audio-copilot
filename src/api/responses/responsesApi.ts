@@ -42,8 +42,8 @@ import { postJson } from "../httpClient";
  * OpenAI Responses API implementation (POST /v1/responses).
  *
  * SenseAudio supports the Responses protocol for models whose /v1/models
- * entry reports supports_responses=true (currently qwen3.7-max, qwen3.8-max and
- * deepseek-v4-flash-0731). This class converts VS Code chat messages to the
+ * entry reports supports_responses=true (all 9 current llm models do, verified
+ * 2026-09-29). This class converts VS Code chat messages to the
  * Responses input format, builds the request body, and parses the SSE stream.
  *
  * Known endpoint constraints (verified against the live API):

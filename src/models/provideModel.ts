@@ -5,6 +5,7 @@ import { logger } from "../core/logger";
 import { getBuiltInModelInfos, getMaxInputTokensRatio } from "./models";
 import { getApiModelIds, getApiModelMetadataList, getResponsesSupportedModelIds, getAnthropicSupportedModelIds, isApiFetchSuccessful, type ApiModelMetadata } from "./apiModelList";
 import { ensureModelsDevLoaded, lookupModelDevEntry, type ModelsDevEntry } from "./modelsDev";
+import { resolveVisionCapability } from "./visionModels";
 import { getPrimaryApiKey } from "../keys/keyManager";
 import type { SenseAudioModelItem } from "../core/types";
 import { l10n } from "../core/localize";
@@ -147,11 +148,9 @@ function storeAutoDiscoveredConfig(
     entry: ModelsDevEntry | undefined,
     apiMode: string = "openai"
 ): SenseAudioModelItem {
-    const modalities = entry?.modalities?.input ?? [];
-    const hasImage = modalities.includes("image") || modalities.includes("video");
-    // /v1/models supports_vision is the primary source (platform truth);
-    // models.dev attachment/modalities is the fallback.
-    const vision = apiMeta?.supports_vision ?? (entry?.attachment === true || hasImage);
+    // Vision capability: /v1/models flag → models.dev → hardcoded fallback.
+    // Shared with the vision-proxy picker so both agree on the same model set.
+    const vision = resolveVisionCapability(modelId, apiMeta, entry);
     const hasReasoning = apiMeta?.supports_reasoning ?? (entry?.reasoning === true);
 
     // Known output limit from /v1/models (primary) or models.dev (fallback).
