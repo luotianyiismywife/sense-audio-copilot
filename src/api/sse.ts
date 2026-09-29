@@ -82,11 +82,32 @@ export async function* iterateSseEvents(
             const lines = buffer.split("\n");
             buffer = lines.pop() || "";
 
+            // SSE 规范：同一事件的多行 `data:` 以 `\n` 拼接成一个事件。
+            // 三家 API 均为单行 JSON，实际无影响，但按规范实现以兼容未来。
+            const events: string[] = [];
+            let pending = "";
             for (const line of lines) {
-                if (!line.startsWith("data:")) {
-                    continue;
+                if (line.startsWith("data:")) {
+                    const data = line.slice(5).trim();
+                    if (data === "[DONE]") {
+                        if (pending) { events.push(pending); pending = ""; }
+                        events.push("[DONE]");
+                    } else if (pending) {
+                        pending += "\n" + data;
+                    } else {
+                        pending = data;
+                    }
+                } else if (!line.trim() && pending) {
+                    // 空行 = 事件边界
+                    events.push(pending);
+                    pending = "";
                 }
-                const data = line.slice(5).trim();
+            }
+            if (pending) {
+                events.push(pending);
+            }
+
+            for (const data of events) {
                 if (debugChunks) {
                     logger.debug(`${tag}.stream.chunk`, { modelId, data });
                 }

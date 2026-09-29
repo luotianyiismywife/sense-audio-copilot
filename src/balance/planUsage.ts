@@ -150,7 +150,12 @@ export async function getPlanUsageCached(
 ): Promise<PlanUsageSnapshot | null> {
     if (!loginToken) {
         lastFetchStatus = "no-token";
-        return cachedSnapshot;
+        // Token cleared → the previous account's snapshot must not linger in
+        // the status bar (it belongs to a different/removed login).
+        cachedSnapshot = null;
+        cacheTimestamp = 0;
+        cachedToken = undefined;
+        return null;
     }
 
     // 换账号（token 变化）后旧账号快照立即失效，避免状态栏短暂显示他人数据

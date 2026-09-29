@@ -85,6 +85,13 @@ export class SenseAudioChatModelProvider implements LanguageModelChatProvider {
     ) { }
 
     /**
+     * Cache of undici Agents keyed by bodyTimeout, so connection pools are
+     * reused across requests instead of being rebuilt (and losing keep-alive
+     * connections) on every chat request.
+     */
+    private _undiciAgents = new Map<number, { agent: unknown; fetch: typeof fetch }>();
+
+    /**
      * Create an undici fetch function with custom bodyTimeout to prevent premature
      * connection termination during long streaming responses.
      * Falls back to global fetch if undici is unavailable.
@@ -93,10 +100,16 @@ export class SenseAudioChatModelProvider implements LanguageModelChatProvider {
         try {
             // eslint-disable-next-line @typescript-eslint/no-require-imports
             const undici = require(path.join(vscode.env.appRoot, 'node_modules', 'undici'));
+            const cached = this._undiciAgents.get(requestTimeoutMs);
+            if (cached) {
+                return cached.fetch;
+            }
             const agent = new undici.Agent({ bodyTimeout: requestTimeoutMs });
-            return (url: RequestInfo | URL, init?: RequestInit) => {
+            const fetchFn: typeof fetch = (url: RequestInfo | URL, init?: RequestInit) => {
                 return undici.fetch(url, { ...init, dispatcher: agent });
             };
+            this._undiciAgents.set(requestTimeoutMs, { agent, fetch: fetchFn });
+            return fetchFn;
         } catch {
             return fetch;
         }

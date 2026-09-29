@@ -92,7 +92,9 @@ export async function showApiKeyManager(context: vscode.ExtensionContext): Promi
         }
         const pickedAction = (picked as { action?: string }).action;
         if (!pickedAction) {
-            return; // selected nothing actionable
+            // Clicking a key entry itself (action "select") has no dedicated
+            // view — stay in the menu instead of silently closing it.
+            continue;
         }
 
         switch (pickedAction) {

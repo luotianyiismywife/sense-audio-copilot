@@ -88,6 +88,10 @@ interface AccountInfoCacheEntry {
     checkedAt: number;
 }
 const accountInfoCache = new Map<string, AccountInfoCacheEntry>();
+/** Max cached tokens — prevents unbounded growth when users paste different
+ * tokens over time (60-day expiry re-paste / multi-account). Oldest entries
+ * are evicted first. */
+const ACCOUNT_INFO_CACHE_MAX = 4;
 
 /**
  * 账号信息拉取结果状态。
@@ -208,6 +212,12 @@ export async function getAccountInfoWithStatus(
     try {
         const info = await queryAccountInfo(loginToken);
         accountInfoCache.set(loginToken, { info, checkedAt: Date.now() });
+        // Evict the oldest entry when over the cap (Map preserves insertion order).
+        while (accountInfoCache.size > ACCOUNT_INFO_CACHE_MAX) {
+            const oldest = accountInfoCache.keys().next().value;
+            if (oldest === undefined) break;
+            accountInfoCache.delete(oldest);
+        }
         return { info, status: "ok" };
     } catch (err) {
         const status: AccountInfoFetchStatus = isUnauthorizedError(err) ? "unauthorized" : "error";

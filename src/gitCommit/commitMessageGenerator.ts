@@ -251,7 +251,6 @@ async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff
         const selectedModel: SenseAudioModelItem = getBuiltInModelConfig(commitModelId) ?? { id: commitModelId, owned_by: "senseaudio" };
         // Commit messages are simple tasks — disable thinking to speed up generation.
         selectedModel.enable_thinking = false;
-        selectedModel.reasoning_effort = "high";
         // Cap max_completion_tokens to avoid proxy 500 errors with oversized values
         if (selectedModel.max_completion_tokens && selectedModel.max_completion_tokens > 8192) {
             selectedModel.max_completion_tokens = 8192;
@@ -322,6 +321,12 @@ async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff
         // same-key retry must not consume the 429/503 whole-round quota.
         let wholeRoundRetryCount = 0;
         let sameKeyRetryCount = 0;
+        // Platform-side transient error (e.g. 500) retry: force re-use of the
+        // SAME key on the next round. Without this, rotation mode's cursor has
+        // already advanced and pickNextApiKey would silently switch to the next
+        // key — contradicting "500 is a platform problem, do not rotate keys"
+        // (mirrors the forceKey mechanism in provider/rotation.ts).
+        let forceKey: ApiKeyEntry | undefined;
 
         while (true) {
             // If every key has failed at least one round, stop trying.
@@ -344,7 +349,8 @@ async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff
                 throw new Error(l10nFormat("All API keys are unavailable ({0}). Use the Manage API Keys command to check availability.", detail));
             }
 
-            let entry = await pickNextApiKey(secrets, apiKeyMode);
+            let entry = forceKey ?? (await pickNextApiKey(secrets, apiKeyMode));
+            forceKey = undefined;
             if (!entry) {
                 // single mode + fallback=switch → switch ONLY when the current key
                 // is balance-exhausted (402 / balance pre-check failed this round);
@@ -459,12 +465,15 @@ async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff
                     if (await tryTransientRetryRound(secrets, sameKeyRetryCount, maxTransientRetries)) {
                         sameKeyRetryCount++;
                         failedKeys.clear();
+                        // Force the SAME key on the next round: 500 is a platform
+                        // problem, not a key problem — do not rotate keys.
+                        forceKey = entry;
                         logger.warn("commit.key.transientRetrySameKey", {
                             key: entry.value.slice(0, 6) + "****",
                             attempt: sameKeyRetryCount,
                             error: err instanceof Error ? err.message : String(err),
                         });
-                        continue; // retry the whole round (same key will be re-picked)
+                        continue; // retry the whole round with the same key
                     }
                     logger.warn("commit.key.transientRetryExhausted", {
                         key: entry.value.slice(0, 6) + "****",

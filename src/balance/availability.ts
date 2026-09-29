@@ -1,4 +1,5 @@
 import type { ApiKeyEntry } from "../keys/keyManager";
+import { getApiModelIds } from "../models/apiModelList";
 
 /**
  * Key 可用性手动检测。
@@ -9,8 +10,19 @@ import type { ApiKeyEntry } from "../keys/keyManager";
 
 const REQUEST_TIMEOUT_MS = 20_000;
 const DEFAULT_BASE_URL = "https://api.senseaudio.cn/v1/";
-/** 手动检测用的最小聊天请求模型（deepseek-v4-flash 已下线，400 "模型未找到"，2026-09-19 实测） */
-const TEST_MODEL_ID = "deepseek-v4.1-flash";
+/** Fallback test model when the live model list is unavailable. */
+const FALLBACK_TEST_MODEL_ID = "deepseek-v4.1-flash";
+
+/**
+ * Pick a test model for the minimal chat request: prefer the first llm model
+ * from the cached /v1/models list (always current), fall back to a hardcoded
+ * ID when the list is unavailable. The hardcoded value has broken twice when
+ * the platform retired models, so the live list is preferred.
+ */
+async function pickTestModelId(): Promise<string> {
+    const ids = await getApiModelIds(undefined);
+    return ids.values().next().value ?? FALLBACK_TEST_MODEL_ID;
+}
 
 /**
  * 手动检测 key 可用性：最小真实聊天请求。
@@ -32,6 +44,7 @@ export async function testKeyAvailability(
         const url = normalized.endsWith("/v1")
             ? `${normalized}/chat/completions`
             : `${normalized}/v1/chat/completions`;
+        const testModelId = await pickTestModelId();
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
         try {
@@ -42,7 +55,7 @@ export async function testKeyAvailability(
                     Authorization: `Bearer ${entry.value}`,
                 },
                 body: JSON.stringify({
-                    model: TEST_MODEL_ID,
+                    model: testModelId,
                     messages: [{ role: "user", content: "say ok" }],
                     stream: false,
                     max_tokens: 8,

@@ -203,8 +203,9 @@ export async function handleInterceptedToolCall(params: VisionRoundParams): Prom
             }
         }, roundTimeoutMs);
         // Forward user cancellation to the new controller
+        let cancelDisposable: vscode.Disposable | undefined;
         if (params.token.onCancellationRequested) {
-            params.token.onCancellationRequested(() => {
+            cancelDisposable = params.token.onCancellationRequested(() => {
                 if (!roundAbortController.signal.aborted) {
                     roundAbortController.abort();
                 }
@@ -221,7 +222,19 @@ export async function handleInterceptedToolCall(params: VisionRoundParams): Prom
             }
         } finally {
             clearTimeout(roundTimeoutId);
+            cancelDisposable?.dispose();
         }
+    }
+
+    // The loop exited — if the model still wants to ask about the image but the
+    // round cap is reached, tell the user instead of silently dropping the call.
+    if (api.interceptedToolCall) {
+        logger.warn("vision.maxRoundsReached", { maxRounds, pendingTool: api.interceptedToolCall.name });
+        params.trackingProgress.report(
+            new vscode.LanguageModelThinkingPart(
+                l10nFormat("Vision question limit reached ({0} rounds); further image questions were dropped.", String(maxRounds))
+            ) as unknown as LanguageModelResponsePart
+        );
     }
 }
 
@@ -271,7 +284,11 @@ async function runAnthropicRound(
         if (params.um?.reasoning_effort === 'adaptive') {
             body.thinking = { type: "adaptive" };
         } else {
-            body.thinking = { type: "enabled", budget_tokens: 8192 };
+            // Anthropic requires budget_tokens < max_tokens — clamp to a safe
+            // fraction of the model's output cap so small-output models don't 400.
+            const maxTokens = params.um?.max_completion_tokens ?? params.um?.max_tokens ?? 8192;
+            const budget = Math.min(8192, Math.max(1024, Math.floor(maxTokens / 2)));
+            body.thinking = { type: "enabled", budget_tokens: budget };
         }
     } else {
         // Match the main Anthropic request (prepareRequestBody): explicitly
@@ -340,7 +357,7 @@ async function runAnthropicRound(
     }
 }
 
-/** Responses 格式：文本化 tool_call 回填（端点拒绝 function_call 块）。 */
+/** Responses 格式：标准顶层 function_call / function_call_output item 回填。 */
 async function runResponsesRound(
     params: VisionRoundParams,
     api: CommonApi<unknown, unknown>,
@@ -350,23 +367,19 @@ async function runResponsesRound(
     hasLocalImages: boolean,
     roundAbortController: AbortController
 ): Promise<void> {
+    // Structured backfill (verified live 2026-09-29): top-level function_call /
+    // function_call_output items. The result field MUST be `output` — `content`
+    // is accepted with 200 but the model never sees the value.
     currentMessages.push({
-        role: "assistant" as const,
-        content: [
-            {
-                type: "output_text" as const,
-                text: `[tool_call] ${intercepted.name}(${JSON.stringify(intercepted.args)}) [/tool_call]`,
-            },
-        ],
+        type: "function_call" as const,
+        call_id: intercepted.id,
+        name: intercepted.name,
+        arguments: JSON.stringify(intercepted.args),
     });
     currentMessages.push({
-        role: "user" as const,
-        content: [
-            {
-                type: "input_text" as const,
-                text: `[tool_result] ${description} [/tool_result]`,
-            },
-        ],
+        type: "function_call_output" as const,
+        call_id: intercepted.id,
+        output: description,
     });
 
     const body: Record<string, unknown> = {
@@ -374,6 +387,12 @@ async function runResponsesRound(
         input: currentMessages,
         stream: true,
     };
+    // Restore the system prompt — convertMessages extracts system messages into
+    // _systemContent (top-level "instructions"), so it must be re-sent here or
+    // the vision round loses all Copilot Chat instructions.
+    if (api.systemContent) {
+        body.instructions = api.systemContent;
+    }
     if (params.um?.max_completion_tokens !== undefined) {
         body.max_output_tokens = params.um.max_completion_tokens;
     } else if (params.um?.max_tokens !== undefined) {

@@ -205,14 +205,6 @@ token 来源：浏览器 `localStorage` 的 `user.state.token`（PASETO v2.publi
 
 用 `pub-*` 公钥换发短期 API token（实测 30 分钟有效期）。请求体 `{"public_key":"pub-..."}`。
 
-### 7.3 已失效端点（勿再使用）
-
-| 旧端点 | 现状 |
-|--------|------|
-| `senseaudio.cn/api/usage-summary` | 404（2026-09-23 实测） |
-| `senseaudio.cn/api/api-keys` | 404 |
-| `platform.senseaudio.cn/api/apikey/list` | 稳定 500（已废弃） |
-
 ---
 
 ## 8. 常见混淆说明

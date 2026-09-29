@@ -4,9 +4,14 @@
  * SenseAudio's Responses endpoint supports a subset of the standard
  * OpenAI Responses API:
  * - Content block types: input_text / output_text / input_image
+ * - Top-level input items: message items + function_call / function_call_output
+ *   items (verified live 2026-09-29 — the endpoint accepts the standard
+ *   structured backfill; the `output` field name is required on
+ *   function_call_output, `content` is silently ignored)
  * - Tool calls: function_call output items + function_call_arguments stream events
  * - Reasoning: reasoning items with summary_text blocks
- * - tool_choice: only "auto" / "none" (object/required forms rejected in thinking mode)
+ * - tool_choice: "auto" / "none" / "required" (the named object form returns a
+ *   deterministic 500, so it is never sent)
  */
 
 /** Content block types supported by SenseAudio's Responses endpoint. */
@@ -28,6 +33,32 @@ export interface ResponsesInputMessage {
     role: "user" | "assistant" | "system" | "developer";
     content: string | ResponsesContentBlock[];
 }
+
+/**
+ * A top-level function_call input item (historical tool call backfill).
+ * `call_id` is required; `id` is optional (both verified accepted live).
+ */
+export interface ResponsesFunctionCallInputItem {
+    type: "function_call";
+    id?: string;
+    call_id: string;
+    name: string;
+    arguments: string;
+}
+
+/**
+ * A top-level function_call_output input item (historical tool result backfill).
+ * The result field MUST be named `output` — `content` is accepted with 200 but
+ * the model does not see the value (verified live 2026-09-29).
+ */
+export interface ResponsesFunctionCallOutputInputItem {
+    type: "function_call_output";
+    call_id: string;
+    output: string;
+}
+
+/** Union of all item types allowed in the input array. */
+export type ResponsesInputItem = ResponsesInputMessage | ResponsesFunctionCallInputItem | ResponsesFunctionCallOutputInputItem;
 
 /** A function_call output item (model decided to call a tool). */
 export interface ResponsesFunctionCallItem {

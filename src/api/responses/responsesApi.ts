@@ -31,12 +31,15 @@ import {
 import type {
     ResponsesContentBlock,
     ResponsesFunctionTool,
+    ResponsesInputItem,
     ResponsesInputMessage,
     ResponsesStreamEvent,
     ResponsesOutputItem,
     ResponsesFunctionCallItem,
 } from "./responsesTypes";
 import { postJson } from "../httpClient";
+import { parseVisionToolHistoryPart } from "../../vision/historyPart";
+import type { VisionToolHistoryEntry } from "../../vision/historyCodec";
 
 /**
  * OpenAI Responses API implementation (POST /v1/responses).
@@ -57,7 +60,7 @@ import { postJson } from "../httpClient";
  *   so it is never sent.
  * - reasoning: { effort: "none" } disables thinking; { effort: "high" } enables it.
  */
-export class ResponsesApi extends CommonApi<ResponsesInputMessage, Record<string, unknown>> {
+export class ResponsesApi extends CommonApi<ResponsesInputItem, Record<string, unknown>> {
     /** Buffer for assembling streamed function_call items by output_index. */
     private _responsesToolCallBuffers: Map<number, { id?: string; callId?: string; name?: string; args: string }> =
         new Map<number, { id?: string; callId?: string; name?: string; args: string }>();
@@ -74,14 +77,16 @@ export class ResponsesApi extends CommonApi<ResponsesInputMessage, Record<string
      *
      * For non-vision models, images are replaced with text references and stored
      * in instance-local _localImages for the ask_image tool. Historical tool
-     * calls/results are textified (the endpoint rejects function_call blocks).
+     * calls/results are backfilled as standard top-level function_call /
+     * function_call_output items (verified live 2026-09-29 — the endpoint
+     * accepts the structured form and the model understands the tool history).
      */
     convertMessages(
         messages: readonly LanguageModelChatRequestMessage[],
         modelConfig: { includeReasoningInRequest: boolean; vision?: boolean }
-    ): ResponsesInputMessage[] {
+    ): ResponsesInputItem[] {
         const modelSupportsVision = modelConfig.vision !== false;
-        const out: ResponsesInputMessage[] = [];
+        const out: ResponsesInputItem[] = [];
         let imageIndex = 0;
         this._systemContent = undefined;
 
@@ -96,9 +101,13 @@ export class ResponsesApi extends CommonApi<ResponsesInputMessage, Record<string
             const imageParts: vscode.LanguageModelDataPart[] = [];
             const toolCalls: { id: string; name: string; args: string }[] = [];
             const toolResults: { callId: string; content: string }[] = [];
+            const visionToolHistory: VisionToolHistoryEntry[] = [];
 
             for (const part of m.content ?? []) {
-                if (part instanceof vscode.LanguageModelTextPart) {
+                const historyEntry = parseVisionToolHistoryPart(part);
+                if (historyEntry) {
+                    visionToolHistory.push(historyEntry);
+                } else if (part instanceof vscode.LanguageModelTextPart) {
                     if (modelSupportsVision) {
                         textParts.push(part.value);
                     } else {
@@ -149,6 +158,23 @@ export class ResponsesApi extends CommonApi<ResponsesInputMessage, Record<string
 
             const joinedText = textParts.join("").trim();
 
+            // Persisted ask_image calls are restored as standard function_call /
+            // function_call_output items, placed before this message's normal
+            // content so the sequence stays: function_call → output → message.
+            for (const entry of visionToolHistory) {
+                out.push({
+                    type: "function_call",
+                    call_id: entry.id,
+                    name: entry.name,
+                    arguments: JSON.stringify(entry.args),
+                });
+                out.push({
+                    type: "function_call_output",
+                    call_id: entry.id,
+                    output: entry.result,
+                });
+            }
+
             if (role === "system") {
                 if (joinedText) {
                     // System prompts go to the top-level "instructions" field.
@@ -162,15 +188,18 @@ export class ResponsesApi extends CommonApi<ResponsesInputMessage, Record<string
                 if (joinedText) {
                     blocks.push({ type: "output_text", text: joinedText });
                 }
-                // Historical tool calls are textified (function_call blocks unsupported)
-                for (const tc of toolCalls) {
-                    blocks.push({
-                        type: "output_text",
-                        text: `[tool_call] ${tc.name}(${tc.args}) [/tool_call]`,
-                    });
-                }
                 if (blocks.length > 0) {
                     out.push({ role: "assistant", content: blocks });
+                }
+                // Historical tool calls become standard top-level function_call
+                // items (structured backfill, verified live 2026-09-29).
+                for (const tc of toolCalls) {
+                    out.push({
+                        type: "function_call",
+                        call_id: tc.id,
+                        name: tc.name,
+                        arguments: tc.args,
+                    });
                 }
                 continue;
             }
@@ -184,15 +213,18 @@ export class ResponsesApi extends CommonApi<ResponsesInputMessage, Record<string
                     const dataUrl = createDataUrl(imagePart);
                     blocks.push({ type: "input_image", image_url: dataUrl });
                 }
-                // Historical tool results are textified
-                for (const tr of toolResults) {
-                    blocks.push({
-                        type: "input_text",
-                        text: `[tool_result] ${tr.content || "(no output)"} [/tool_result]`,
-                    });
-                }
                 if (blocks.length > 0) {
                     out.push({ role: "user", content: blocks });
+                }
+                // Historical tool results become standard top-level
+                // function_call_output items. The result field MUST be `output`
+                // (`content` is accepted with 200 but the model never sees it).
+                for (const tr of toolResults) {
+                    out.push({
+                        type: "function_call_output",
+                        call_id: tr.callId,
+                        output: tr.content || "(no output)",
+                    });
                 }
             }
         }

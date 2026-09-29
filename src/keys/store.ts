@@ -68,6 +68,14 @@ export async function getApiKeyStore(secrets: vscode.SecretStorage): Promise<Api
     }
 
     setStoreCache(store);
+    // Another window may have written to SecretStorage (e.g. cloud sync pull);
+    // invalidate the in-memory cache so the next read picks up the fresh data.
+    // (SecretStorage has no change event, so polling on each read is the only way.)
+    void secrets.get(STORE_KEY).then((fresh) => {
+        if (fresh && fresh !== JSON.stringify(store)) {
+            invalidateApiKeyStoreCache();
+        }
+    });
     return store;
 }
 

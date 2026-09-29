@@ -292,7 +292,7 @@ provideLanguageModelChatResponse(model, messages, options, progress, token)
   │           ├── 创建独立 AbortController 用于本轮请求
   │           │   ├── 保留 temperature/reasoning_effort 等原始参数
   │           │   ├── Anthropic 模式额外恢复 system 和 thinking 配置
-  │           │   ├── Responses 模式使用文本化回填（output_text/input_text）
+  │           │   ├── Responses 模式使用标准顶层 function_call / function_call_output item 回填（2026-09-29 实测可用）
   │           │   └── DeepSeek 兼容注入 reasoning_content
   │           ├── 注入工具: 本轮注入 VS Code 原生工具 + ask_image（+ ask_with_multi_image 当 >=2 张图时）
   │           └── 循环: 若模型再次调用 ask_image 则继续下一轮，无限追问
@@ -407,7 +407,7 @@ provideLanguageModelChatResponse(model, messages, options, progress, token)
 - **跨轮视觉历史持久化（v1.8.0）**: 每轮视觉代理完成后输出私有 MIME `application/vnd.opencodego.vision-tool-history+json` 的 `LanguageModelDataPart`（`historyPart.ts` 的 `createVisionToolHistoryPart`），VS Code 自动带入下一轮对话；下次请求 `convertMessages` 经 `parseVisionToolHistoryPart` 识别并重建标准 tool call/tool result 消息（`historyCodec.ts` 的 `toOpenAIVisionToolMessages` / `toAnthropicVisionToolMessages`）——模型跨轮记住之前看过的图片，不会重复调用 ask_image 或忘记图片内容
 - **OpenAI 模式**: 使用 `tool_calls` + `tool` role 消息格式构建每轮
 - **Anthropic 模式**: 使用 `tool_use` + `tool_result` content block 格式构建每轮；**连续工具结果合并（v1.8.0）**: VS Code 可能把每个工具结果作为独立消息传入，Anthropic 协议要求同一 assistant `tool_use` 对应的全部 `tool_result` 必须在紧随的同一条 user 消息里——`convertMessages` 缓冲纯工具结果消息（`pendingToolResults`），合并为单条 user 消息输出，避免 400 "tool_use ids were found without tool_result blocks immediately after"
-- **Responses 模式**: 使用文本化回填（assistant `output_text` `[tool_call] name(args) [/tool_call]` + user `input_text` `[tool_result] ... [/tool_result]`，因端点拒绝 function_call 块）。**工具定义需扁平格式**：Responses 端点要求 `{ type: "function", name, description, parameters }`（OpenAI 端点的嵌套 `function` 格式会被拒绝，报 `InvalidParameter: ...valid openai-compatible JSON schema`）——`ResponsesApi.prepareRequestBody` 已按扁平格式注入，且工具定义来自 VS Code 转换后的扁平结构
+- **Responses 模式**: 使用标准顶层 `function_call` / `function_call_output` item 回填（2026-09-29 实测可用，模型正确理解工具历史；`function_call_output` 的结果字段必须叫 `output`，`content` 会被静默忽略）。**工具定义需扁平格式**：Responses 端点要求 `{ type: "function", name, description, parameters }`（OpenAI 端点的嵌套 `function` 格式会被拒绝，报 `InvalidParameter: ...valid openai-compatible JSON schema`）——`ResponsesApi.prepareRequestBody` 已按扁平格式注入，且工具定义来自 VS Code 转换后的扁平结构
 - **参数保留**: 每轮保留 temperature、top_p、thinking 模式等原始参数
 - **DeepSeek 兼容**: 对 DeepSeek 模型的 assistant tool_call 消息注入 reasoning_content 字段
 
@@ -789,7 +789,7 @@ test/                                     # 测试脚本（运行前需 npm run 
 Anthropic 格式轮次：`tool_use` + `tool_result` content block；恢复 `system` 与 `thinking` 配置（启用→`{ type: "enabled", budget_tokens: 8192 }` / adaptive→`{ type: "adaptive" }` / 禁用→`{ type: "disabled" }`）；工具用 Anthropic 格式（`name`/`description`/`input_schema`）。
 
 #### `runResponsesRound(...): Promise<void>`（模块级私有）
-Responses 格式轮次：文本化回填（assistant `output_text` `[tool_call] name(args) [/tool_call]` + user `input_text` `[tool_result] ... [/tool_result]`，因端点拒绝 function_call 块）；工具用扁平格式 `{ type: "function", name, description, parameters }`。
+Responses 格式轮次：标准顶层 `function_call` / `function_call_output` item 回填（2026-09-29 实测可用）；**恢复 `instructions`（system prompt）**——`convertMessages` 把 system 提取到 `_systemContent`，不回填则视觉轮丢失全部 Copilot 指令；工具用扁平格式 `{ type: "function", name, description, parameters }`。
 
 #### `runOpenAIRound(...): Promise<void>`（模块级私有）
 OpenAI 格式轮次：assistant `tool_calls` + `tool` role 消息；DeepSeek 兼容注入 `reasoning_content`（取自 `api.capturedReasoningContent`，用后清空）。
@@ -1620,7 +1620,7 @@ Anthropic 请求体。包含 `model`, `messages`, `max_tokens`, `system`, `strea
 构造函数，传入模型 ID。
 
 #### `convertMessages(messages, modelConfig): ResponsesInputMessage[]`
-将 VS Code 消息转换为 Responses input 格式。系统消息提取到 `_systemContent`（用于 `instructions` 字段）。支持文本、图片（`input_image`）、历史工具调用/结果（**文本化回填**：assistant `[tool_call] name(args) [/tool_call]` + user `[tool_result] ... [/tool_result]`，因端点拒绝 function_call 块）。modelConfig 新增 `vision` 字段，非视觉模型时自动替换图片为文本引用并存储图片数据。
+将 VS Code 消息转换为 Responses input 格式。系统消息提取到 `_systemContent`（用于 `instructions` 字段）。支持文本、图片（`input_image`）、历史工具调用/结果（**标准顶层 item 回填**：`function_call` + `function_call_output`，2026-09-29 实测可用）与**跨轮视觉历史恢复**（`parseVisionToolHistoryPart` → 重建 function_call/output items，修复此前 Responses 模式下视觉历史被静默丢弃的问题）。modelConfig 新增 `vision` 字段，非视觉模型时自动替换图片为文本引用并存储图片数据。
 
 #### `prepareRequestBody(rb, um?, options?): Record<string, unknown>`
 构建 Responses 请求体。设置 instructions（system）、temperature、top_p、max_output_tokens、reasoning（启用→`{ effort }`，禁用→`{ effort: "none" }`，adaptive→省略）、tools（Responses function 格式）、tool_choice（仅 `auto`/`none`，SenseAudio 拒绝 object/required 形式）。**工具定义必须使用扁平格式** `{ type: "function", name, description, parameters }`（OpenAI 嵌套 `function` 格式被端点拒绝）。非视觉模型且存在图片时自动注入 `ask_image` 工具定义。
