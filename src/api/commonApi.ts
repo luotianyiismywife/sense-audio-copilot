@@ -112,8 +112,9 @@ export abstract class CommonApi<TMessage, TRequestBody> {
     /**
      * Store the converted API messages so the provider can reference them
      * when building the second round (tool call + result) request.
+     * Protocol-specific shape (OpenAI / Anthropic / Responses), hence `unknown[]`.
      */
-    protected _originalApiMessages: any[] | null = null;
+    protected _originalApiMessages: unknown[] | null = null;
 
     /**
      * Get the stored images associated with this instance, if any.

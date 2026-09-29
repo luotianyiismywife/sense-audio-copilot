@@ -3,6 +3,12 @@
  *
  * 用法:
  *   node test/api-tests.mjs <API_KEY> [openai|anthropic|responses|all]
+ *
+ * 模型 ID 可用环境变量覆盖（默认取当前平台在售模型，2026-09-29 实测）：
+ *   SENSEAUDIO_TEST_MODEL          主测试模型（默认 deepseek-v4.1-flash）
+ *   SENSEAUDIO_TEST_THINKING_MODEL 思考/effort 测试模型（默认 glm-5.3-flash）
+ *   SENSEAUDIO_TEST_VISION_MODEL   图片输入测试模型（默认 qwen3.6-35b-a3b）
+ *   SENSEAUDIO_TEST_RESP_MODELS    Responses 测试模型（逗号分隔）
  */
 const API_KEY = process.argv[2];
 const filter = process.argv[3] || "all";
@@ -10,6 +16,12 @@ if (!API_KEY) {
     console.error("用法: node test/api-tests.mjs <API_KEY> [openai|anthropic|responses|all]");
     process.exit(1);
 }
+
+// 当前平台在售模型（2026-09-29 实测 /v1/models 返回 9 个 llm 模型）
+const TEST_MODEL = process.env.SENSEAUDIO_TEST_MODEL || "deepseek-v4.1-flash";
+const THINKING_MODEL = process.env.SENSEAUDIO_TEST_THINKING_MODEL || "glm-5.3-flash";
+const VISION_MODEL = process.env.SENSEAUDIO_TEST_VISION_MODEL || "qwen3.6-35b-a3b";
+const RESP_MODELS = (process.env.SENSEAUDIO_TEST_RESP_MODELS || "glm-5.3-flash,deepseek-v4-flash-0731,qwen3.8-27b").split(",");
 
 const BASE = "https://api.senseaudio.cn/v1";
 let passed = 0;
@@ -79,7 +91,7 @@ const FLAT_TOOLS = [
  * Node 环境下使用硬编码的 100x100 红色 PNG。
  */
 function makePng(width, height) {
-    // 1x1 红色 PNG（仅用于验证最小可用性；qwen3.8-max 要求 >=10x10）
+    // 1x1 红色 PNG（仅用于验证最小可用性；部分模型要求 >=10x10）
     return "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 }
 
@@ -88,7 +100,7 @@ async function testOpenAI() {
 
     console.log("--- 1. 非流式对话 ---");
     {
-        const r = await api("/chat/completions", { model: "deepseek-v4-flash", messages: [{ role: "user", content: "回复OK" }], stream: false });
+        const r = await api("/chat/completions", { model: TEST_MODEL, messages: [{ role: "user", content: "回复OK" }], stream: false });
         check("HTTP 200", r.ok, `s=${r.status} ${r.raw}`);
         check("content 存在", !!r.body?.choices?.[0]?.message?.content);
         check("usage 存在", !!r.body?.usage);
@@ -97,7 +109,7 @@ async function testOpenAI() {
 
     console.log("--- 2. 流式对话 ---");
     {
-        const r = await api("/chat/completions", { model: "deepseek-v4-flash", messages: [{ role: "user", content: "用一句话介绍你自己" }], stream: true, stream_options: { include_usage: true } });
+        const r = await api("/chat/completions", { model: TEST_MODEL, messages: [{ role: "user", content: "用一句话介绍你自己" }], stream: true, stream_options: { include_usage: true } });
         check("流式文本增量", r.body.some(e => e.choices?.[0]?.delta?.content));
         check("流式推理增量", r.body.some(e => e.choices?.[0]?.delta?.reasoning_content));
         check("流式 usage chunk", r.body.some(e => e.usage));
@@ -105,7 +117,7 @@ async function testOpenAI() {
 
     console.log("--- 3. 流式工具调用 ---");
     {
-        const r = await api("/chat/completions", { model: "deepseek-v4-flash", messages: [{ role: "user", content: "请使用 get_weather 工具查询北京的天气" }], stream: true, tools: TOOLS, tool_choice: "auto" });
+        const r = await api("/chat/completions", { model: TEST_MODEL, messages: [{ role: "user", content: "请使用 get_weather 工具查询北京的天气" }], stream: true, tools: TOOLS, tool_choice: "auto" });
         const tcs = r.body.flatMap(e => e.choices?.[0]?.delta?.tool_calls ?? []);
         check("收到 tool_calls", tcs.length > 0, `n=${tcs.length}`);
         const name = tcs.find(t => t.function?.name)?.function?.name;
@@ -115,7 +127,7 @@ async function testOpenAI() {
     console.log("--- 4. 多轮工具回填 ---");
     {
         const r = await api("/chat/completions", {
-            model: "deepseek-v4-flash",
+            model: TEST_MODEL,
             messages: [
                 { role: "user", content: "查询北京天气" },
                 { role: "assistant", content: null, tool_calls: [{ id: "call_1", type: "function", function: { name: "get_weather", arguments: '{"city":"北京"}' } }] },
@@ -128,12 +140,12 @@ async function testOpenAI() {
 
     console.log("--- 5. thinking 参数 ---");
     {
-        const r1 = await api("/chat/completions", { model: "deepseek-v4-flash", messages: [{ role: "user", content: "回复OK" }], stream: false, thinking: { type: "enabled" } });
+        const r1 = await api("/chat/completions", { model: TEST_MODEL, messages: [{ role: "user", content: "回复OK" }], stream: false, thinking: { type: "enabled" } });
         check("thinking=enabled", r1.ok, `s=${r1.status} ${r1.raw}`);
-        const r2 = await api("/chat/completions", { model: "deepseek-v4-flash", messages: [{ role: "user", content: "回复OK" }], stream: false, thinking: { type: "disabled" } });
+        const r2 = await api("/chat/completions", { model: TEST_MODEL, messages: [{ role: "user", content: "回复OK" }], stream: false, thinking: { type: "disabled" } });
         check("thinking=disabled", r2.ok, `s=${r2.status} ${r2.raw}`);
-        const r3 = await api("/chat/completions", { model: "glm-5.2", messages: [{ role: "user", content: "回复OK" }], stream: false, thinking: { type: "enabled" }, reasoning_effort: "high" });
-        check("GLM-5.2 thinking+effort", r3.ok, `s=${r3.status} ${r3.raw}`);
+        const r3 = await api("/chat/completions", { model: THINKING_MODEL, messages: [{ role: "user", content: "回复OK" }], stream: false, thinking: { type: "enabled" }, reasoning_effort: "high" });
+        check(`${THINKING_MODEL} thinking+effort`, r3.ok, `s=${r3.status} ${r3.raw}`);
     }
 }
 
@@ -143,7 +155,7 @@ async function testAnthropic() {
 
     console.log("--- 6. 非流式对话 ---");
     {
-        const r = await api("/messages", { model: "deepseek-v4-flash", max_tokens: 512, messages: [{ role: "user", content: "回复OK" }] }, ANTH);
+        const r = await api("/messages", { model: TEST_MODEL, max_tokens: 512, messages: [{ role: "user", content: "回复OK" }] }, ANTH);
         check("HTTP 200", r.ok, `s=${r.status} ${r.raw}`);
         check("type=message", r.body?.type === "message");
         check("有文本块", r.body?.content?.some(b => b.type === "text" && b.text));
@@ -153,7 +165,7 @@ async function testAnthropic() {
 
     console.log("--- 7. 流式对话 ---");
     {
-        const r = await api("/messages", { model: "deepseek-v4-flash", max_tokens: 256, stream: true, messages: [{ role: "user", content: "say OK" }] }, ANTH);
+        const r = await api("/messages", { model: TEST_MODEL, max_tokens: 256, stream: true, messages: [{ role: "user", content: "say OK" }] }, ANTH);
         const types = new Set(r.body.map(e => e.type));
         check("message_start", types.has("message_start"));
         check("content_block_delta", types.has("content_block_delta"));
@@ -165,7 +177,7 @@ async function testAnthropic() {
     console.log("--- 8. 流式工具调用 ---");
     {
         const r = await api("/messages", {
-            model: "deepseek-v4-flash", max_tokens: 512, stream: true,
+            model: TEST_MODEL, max_tokens: 512, stream: true,
             messages: [{ role: "user", content: "必须使用 get_weather 工具查询北京的天气" }],
             tools: [{ name: "get_weather", description: "Get weather of a city", input_schema: { type: "object", properties: { city: { type: "string" } }, required: ["city"] } }],
             tool_choice: { type: "any" },
@@ -177,44 +189,43 @@ async function testAnthropic() {
 
     console.log("--- 9. thinking 参数 ---");
     {
-        const r1 = await api("/messages", { model: "deepseek-v4-flash", max_tokens: 256, messages: [{ role: "user", content: "回复OK" }], thinking: { type: "adaptive" } }, ANTH);
+        const r1 = await api("/messages", { model: TEST_MODEL, max_tokens: 256, messages: [{ role: "user", content: "回复OK" }], thinking: { type: "adaptive" } }, ANTH);
         check("thinking=adaptive", r1.ok, `s=${r1.status} ${r1.raw}`);
-        const r2 = await api("/messages", { model: "deepseek-v4-flash", max_tokens: 256, messages: [{ role: "user", content: "回复OK" }], thinking: { type: "disabled" } }, ANTH);
+        const r2 = await api("/messages", { model: TEST_MODEL, max_tokens: 256, messages: [{ role: "user", content: "回复OK" }], thinking: { type: "disabled" } }, ANTH);
         check("thinking=disabled", r2.ok, `s=${r2.status} ${r2.raw}`);
     }
 
     console.log("--- 9b. temperature/top_p 与 thinking 组合（2026-08-06 生产 400 复现 + 规则验证） ---");
     {
-        // 实测规则（deepseek-v4-flash，2026-08-06）：
+        // 实测规则（deepseek 系列，2026-08-06）：
         //   enabled + temp/top_p → 400 "请求参数组合无效"（生产 bug 根因，Anthropic 协议要求 extended thinking 时省略 temperature）
         //   adaptive + temp/top_p → 200 OK
         //   disabled + temp → 200 OK
         // 插件 `AnthropicApi.prepareRequestBody` 仅在 thinking 强制 enabled 时跳过 temperature/top_p。
-        const r1 = await api("/messages", { model: "deepseek-v4-flash", max_tokens: 256, messages: [{ role: "user", content: "回复OK" }], thinking: { type: "enabled" }, temperature: 0 }, ANTH);
+        const r1 = await api("/messages", { model: TEST_MODEL, max_tokens: 256, messages: [{ role: "user", content: "回复OK" }], thinking: { type: "enabled" }, temperature: 0 }, ANTH);
         check("enabled+temp → 400 组合无效", !r1.ok && r1.status === 400, `s=${r1.status} ${r1.raw}`);
-        const r1b = await api("/messages", { model: "deepseek-v4-flash", max_tokens: 256, messages: [{ role: "user", content: "回复OK" }], thinking: { type: "enabled" }, top_p: 1 }, ANTH);
+        const r1b = await api("/messages", { model: TEST_MODEL, max_tokens: 256, messages: [{ role: "user", content: "回复OK" }], thinking: { type: "enabled" }, top_p: 1 }, ANTH);
         check("enabled+top_p → 400 组合无效", !r1b.ok && r1b.status === 400, `s=${r1b.status} ${r1b.raw}`);
-        const r2 = await api("/messages", { model: "deepseek-v4-flash", max_tokens: 256, messages: [{ role: "user", content: "回复OK" }], thinking: { type: "adaptive" }, temperature: 0, top_p: 1 }, ANTH);
+        const r2 = await api("/messages", { model: TEST_MODEL, max_tokens: 256, messages: [{ role: "user", content: "回复OK" }], thinking: { type: "adaptive" }, temperature: 0, top_p: 1 }, ANTH);
         check("adaptive+temp+top_p → 200 通过", r2.ok, `s=${r2.status} ${r2.raw}`);
-        const r3 = await api("/messages", { model: "deepseek-v4-flash", max_tokens: 256, messages: [{ role: "user", content: "回复OK" }], thinking: { type: "disabled" }, temperature: 0 }, ANTH);
+        const r3 = await api("/messages", { model: TEST_MODEL, max_tokens: 256, messages: [{ role: "user", content: "回复OK" }], thinking: { type: "disabled" }, temperature: 0 }, ANTH);
         check("disabled+temp → 200 通过", r3.ok, `s=${r3.status} ${r3.raw}`);
     }
 }
 
 async function testResponses() {
     console.log("\n=== Responses 协议 (/v1/responses) ===");
-    const RESP_MODELS = ["qwen3.7-max", "deepseek-v4-flash-0731", "qwen3.8-max"];
 
     console.log("--- 10. 非流式对话 ---");
     {
-        const r = await api("/responses", { model: "qwen3.7-max", input: [{ role: "user", content: [{ type: "input_text", text: "回复OK" }] }], stream: false });
+        const r = await api("/responses", { model: RESP_MODELS[0], input: [{ role: "user", content: [{ type: "input_text", text: "回复OK" }] }], stream: false });
         check("HTTP 200", r.ok, `s=${r.status} ${r.raw}`);
         check("status=completed", r.body?.status === "completed", `s=${r.body?.status}`);
         check("output_text 存在", !!r.body?.output_text);
         check("usage 存在", !!r.body?.usage);
     }
 
-    console.log("--- 11. 流式对话 (三模型) ---");
+    console.log(`--- 11. 流式对话 (${RESP_MODELS.length} 模型) ---`);
     for (const model of RESP_MODELS) {
         const r = await api("/responses", { model, input: [{ role: "user", content: [{ type: "input_text", text: "用一句话介绍你自己" }] }], stream: true });
         const types = new Set(r.body.map(e => e.type));
@@ -226,7 +237,7 @@ async function testResponses() {
     console.log("--- 12. 流式工具调用 ---");
     {
         const r = await api("/responses", {
-            model: "qwen3.7-max",
+            model: RESP_MODELS[0],
             input: [{ role: "user", content: [{ type: "input_text", text: "查询北京天气" }] }],
             stream: true, tools: FLAT_TOOLS, tool_choice: "required", reasoning: { effort: "none" },
         });
@@ -243,7 +254,7 @@ async function testResponses() {
     console.log("--- 13. 工具调用回填（文本化） ---");
     {
         const r = await api("/responses", {
-            model: "qwen3.7-max",
+            model: RESP_MODELS[0],
             input: [
                 { role: "user", content: [{ type: "input_text", text: "查询北京天气" }] },
                 { role: "assistant", content: [{ type: "output_text", text: '[tool_call] get_weather({"city":"北京"}) [/tool_call]' }] },
@@ -256,24 +267,24 @@ async function testResponses() {
 
     console.log("--- 14. reasoning 参数 ---");
     {
-        const r1 = await api("/responses", { model: "qwen3.7-max", input: [{ role: "user", content: [{ type: "input_text", text: "回复OK" }] }], stream: false, reasoning: { effort: "none" } });
+        const r1 = await api("/responses", { model: RESP_MODELS[0], input: [{ role: "user", content: [{ type: "input_text", text: "回复OK" }] }], stream: false, reasoning: { effort: "none" } });
         check("reasoning=none", r1.ok, `s=${r1.status} ${r1.raw}`);
         const rt = r1.body?.usage?.output_tokens_details?.reasoning_tokens;
         check("reasoning=none 无推理tokens", rt === 0, `rt=${rt}`);
-        const r2 = await api("/responses", { model: "qwen3.7-max", input: [{ role: "user", content: [{ type: "input_text", text: "回复OK" }] }], stream: false, reasoning: { effort: "high" } });
+        const r2 = await api("/responses", { model: RESP_MODELS[0], input: [{ role: "user", content: [{ type: "input_text", text: "回复OK" }] }], stream: false, reasoning: { effort: "high" } });
         check("reasoning=high", r2.ok, `s=${r2.status} ${r2.raw}`);
     }
 
-    console.log("--- 15. 图片输入 (qwen3.8-max) ---");
+    console.log(`--- 15. 图片输入 (${VISION_MODEL}) ---`);
     {
-        // 注意: qwen3.8-max 要求图片至少 10x10 像素（1x1 会被拒绝）
+        // 注意: 部分模型要求图片至少 10x10 像素（1x1 会被拒绝）
         const pngB64 = "iVBORw0KGgoAAAANSUhEUgAAAGQAAABkCAYAAABw4pVUAAAAJUlEQVR42u3BAQEAAACCIP+vbkhAAQAAAAAAAAAAAAAAAADXBjZgAAH6vF+JAAAAAElFTkSuQmCC";
         const r = await api("/responses", {
-            model: "qwen3.8-max",
+            model: VISION_MODEL,
             input: [{ role: "user", content: [{ type: "input_image", image_url: `data:image/png;base64,${pngB64}` }, { type: "input_text", text: "这张图是什么颜色？" }] }],
             stream: false,
         });
-        check("qwen3.8-max 图片输入", r.ok && r.body?.status === "completed", `s=${r.status} ${r.raw}`);
+        check(`${VISION_MODEL} 图片输入`, r.ok && r.body?.status === "completed", `s=${r.status} ${r.raw}`);
     }
 }
 
@@ -286,17 +297,12 @@ async function testErrors() {
         check("无效模型返回 4xx", r.status >= 400 && r.status < 500, `s=${r.status}`);
         check("错误含 message", !!r.body?.error?.message || !!r.body?.message);
     }
-
-    console.log("--- 16b. Anthropic 不支持的模型 (qwen3.7-max) ---");
-    {
-        const r = await api("/messages", { model: "qwen3.7-max", max_tokens: 256, messages: [{ role: "user", content: "hi" }] }, { "anthropic-version": "2023-06-01" });
-        check("qwen3.7-max Anthropic 返回错误", !r.ok && r.status >= 400, `s=${r.status} ${r.raw}`);
-    }
 }
 
 async function main() {
     console.log(`SenseAudio API 测试 (filter=${filter})`);
-    console.log(`模型能力: responses=[qwen3.7-max, deepseek-v4-flash-0731, qwen3.8-max]`);
+    console.log(`测试模型: 主=${TEST_MODEL} 思考=${THINKING_MODEL} 视觉=${VISION_MODEL}`);
+    console.log(`Responses 模型: [${RESP_MODELS.join(", ")}]`);
 
     if (filter === "all" || filter === "openai") await testOpenAI();
     if (filter === "all" || filter === "anthropic") await testAnthropic();

@@ -7,9 +7,9 @@ import { l10n } from "../core/localize";
  * Built-in model definition for SenseAudio.
  */
 interface BuiltInModelDef {
-    /** Base model ID sent to the API (e.g., "glm-5.1") */
+    /** Base model ID sent to the API (e.g., "glm-5.3-flash") */
     baseId: string;
-    /** User-friendly display name (e.g., "GLM-5.1") */
+    /** User-friendly display name (e.g., "GLM-5.3-Flash") */
     displayName: string;
     /** Whether the model supports image input */
     vision: boolean;

@@ -249,7 +249,7 @@ export class AnthropicApi extends CommonApi<AnthropicMessage, AnthropicRequestBo
 		// Flush any tool results still buffered at the end of the message list
 		flushPendingToolResults();
 
-		this._originalApiMessages = out as any[];
+		this._originalApiMessages = out;
 		return out;
 	}
 

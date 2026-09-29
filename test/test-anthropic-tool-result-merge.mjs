@@ -104,7 +104,7 @@ try {
 		{ role: 1, content: [new TextPart("Now analyze these files.")] },
 	];
 
-	const api = new AnthropicApi("deepseek-v4-flash");
+	const api = new AnthropicApi("deepseek-v4.1-flash");
 	const out = await api.convertMessages(messages, {
 		includeReasoningInRequest: true,
 		vision: false,

@@ -3,7 +3,7 @@
 > ⚠️ **遇到 SenseAudio API 集成问题（参数 400、协议不兼容、能力标记等）时，优先查看本文档和官方 API 文档**：
 > - 官方 API 文档：<https://docs.senseaudio.cn/api-reference/introduction>
 > - 调试时以官网示例（cURL/Node.js）为基准，对比插件请求体差异。
-> - **Responses API（`/v1/responses`）问题分析见 [`docs/responses-api-issues.md`](../docs/responses-api-issues.md)**（工具格式扁平化、拒绝 function_call 块、tool_choice 受限等）。
+> - Responses API（`/v1/responses`）的实测行为见 `test/test-responses-recheck.mjs`（工具格式扁平化、function_call 块、tool_choice）。
 >
 > 本文档记录 SenseAudio 平台的 API 地址信息，供扩展开发与调试参考。
 > 最后更新：2026-09-23（平台改版重探：三域认证体系 + 套餐用量数据源 + 旧端点 404）
@@ -46,10 +46,10 @@ https://api.senseaudio.cn/v1
 
 | 文件 | 常量 / 位置 |
 |------|-------------|
-| `src/apiModelList.ts` | `API_BASE_URL = "https://api.senseaudio.cn/v1/"` |
-| `src/provider.ts` | `um?.baseUrl \|\| "https://api.senseaudio.cn/v1/"` |
+| `src/models/apiModelList.ts` | `API_BASE_URL = "https://api.senseaudio.cn/v1/"` |
+| `src/provider/provider.ts` | `um?.baseUrl \|\| "https://api.senseaudio.cn/v1/"` |
 | `src/gitCommit/commitMessageGenerator.ts` | `selectedModel.baseUrl \|\| "https://api.senseaudio.cn/v1/"` |
-| `scripts/check-new-models.mjs` | `API_BASE_URL = "https://api.senseaudio.cn/v1/"` |
+| `scripts/dev/check-new-models.mjs` | `API_BASE_URL = "https://api.senseaudio.cn/v1/"` |
 | `test/api-tests.mjs` | `BASE = "https://api.senseaudio.cn/v1"` |
 
 ---
@@ -58,7 +58,7 @@ https://api.senseaudio.cn/v1
 
 > **models.dev ≠ SenseAudio API 文档**
 
-- `models.dev`（<https://models.dev/models.json>）是 **OpenRouter 维护的全球模型目录数据库**，仅用于本扩展**自动模型发现**时获取新模型的规格元数据（上下文长度、视觉能力、工具调用、推理能力等），由 `src/modelsDev.ts` 下载并缓存。
+- `models.dev`（<https://models.dev/models.json>）是 **OpenRouter 维护的全球模型目录数据库**，仅用于本扩展**自动模型发现**时获取新模型的规格元数据（上下文长度、视觉能力、工具调用、推理能力等），由 `src/models/modelsDev.ts` 下载并缓存。
 - 扩展**实际请求**走的是上方 `https://api.senseaudio.cn/v1` 地址，两者用途不同，勿混淆。
 
 ---
@@ -82,9 +82,9 @@ https://api.senseaudio.cn/v1
 | **Anthropic 协议建议** | **建议优先使用 OpenAI 兼容格式**：Anthropic 端点按 Anthropic 标准对部分组合更严格（如 thinking enabled + temperature → 400），OpenAI 端点容忍该组合（设置了不报错只不生效，与 DeepSeek 官方一致）。仅在明确需要 Anthropic 原生 Messages 格式时使用 |
 | 流式响应解析 | OpenAI SSE `choices[0].delta.content`；Anthropic 原生 Messages 流式事件。**两种协议不要混用解析器** |
 | Responses 端点工具格式 | 工具定义需**扁平格式** `{ type: "function", name, description, parameters }`（OpenAI 嵌套 `function` 格式会被拒） |
-| Responses `tool_choice` | 仅接受 `auto` / `none`（思考模式下拒绝 `required`/对象形式） |
-| Anthropic 协议非全量 | `qwen3.7-max`、`kimi-k2.7-code` 不支持（`supports_anthropic=false`），以 `/v1/models` 动态标记为准 |
-| qwen3.8-max 图片限制 | 图片尺寸必须 >= 10x10 像素 |
+| Responses `tool_choice` | `auto` / `none` / `required` 可用；具名形式 `{type:"function",name}` 返回稳定 500，插件从不发送 |
+| Anthropic 协议非全量 | 以 `/v1/models` 的 `protocols` 动态标记为准（不硬编码模型 ID） |
+| 图片尺寸限制 | 部分模型要求图片 >= 10x10 像素 |
 
 ---
 

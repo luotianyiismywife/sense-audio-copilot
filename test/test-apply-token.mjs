@@ -1,6 +1,12 @@
 // 测试：用 API Key 的 public_key 换发短期 token（auth.senseaudio.cn）
 // 用法：node test/test-apply-token.mjs <public_key>
-const publicKey = process.argv[2] || 'pub-UKppCPeSX2ZYawykfiFGML';
+//      或设置环境变量 SENSEAUDIO_PUBLIC_KEY
+const publicKey = process.argv[2] || process.env.SENSEAUDIO_PUBLIC_KEY;
+if (!publicKey) {
+    console.error('用法：node test/test-apply-token.mjs <public_key>');
+    console.error('  或：SENSEAUDIO_PUBLIC_KEY=<key> node test/test-apply-token.mjs');
+    process.exit(1);
+}
 
 const res = await fetch('https://auth.senseaudio.cn/v1/apikey/apply_token_via_public_key', {
     method: 'POST',

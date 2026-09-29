@@ -72,7 +72,7 @@ export async function handleInterceptedToolCall(params: VisionRoundParams): Prom
     const maxRounds = config.get<number>("senseaudio.visionMaxRounds", 5);
 
     // Accumulate messages across rounds
-    let currentMessages: any[] = [...storedMessages];
+    let currentMessages: Record<string, unknown>[] = [...(storedMessages as Record<string, unknown>[])];
 
     for (let round = 1; round <= maxRounds; round++) {
         const intercepted = api.interceptedToolCall;
@@ -229,7 +229,7 @@ export async function handleInterceptedToolCall(params: VisionRoundParams): Prom
 async function runAnthropicRound(
     params: VisionRoundParams,
     api: CommonApi<unknown, unknown>,
-    currentMessages: any[],
+    currentMessages: Record<string, unknown>[],
     intercepted: NonNullable<CommonApi<unknown, unknown>["interceptedToolCall"]>,
     description: string,
     hasLocalImages: boolean,
@@ -344,7 +344,7 @@ async function runAnthropicRound(
 async function runResponsesRound(
     params: VisionRoundParams,
     api: CommonApi<unknown, unknown>,
-    currentMessages: any[],
+    currentMessages: Record<string, unknown>[],
     intercepted: NonNullable<CommonApi<unknown, unknown>["interceptedToolCall"]>,
     description: string,
     hasLocalImages: boolean,
@@ -458,7 +458,7 @@ async function runResponsesRound(
 async function runOpenAIRound(
     params: VisionRoundParams,
     api: CommonApi<unknown, unknown>,
-    currentMessages: any[],
+    currentMessages: Record<string, unknown>[],
     intercepted: NonNullable<CommonApi<unknown, unknown>["interceptedToolCall"]>,
     description: string,
     hasLocalImages: boolean,
@@ -522,7 +522,7 @@ async function runOpenAIRound(
     }
 
     // Inject tools (VS Code + ask_image + ask_with_multi_image)
-    const openaiToolList: any[] = [];
+    const openaiToolList: unknown[] = [];
     const toolConfig = convertToolsToOpenAI(params.options);
     if (toolConfig.tools) {
         openaiToolList.push(...toolConfig.tools);

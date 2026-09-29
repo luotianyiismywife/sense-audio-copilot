@@ -72,41 +72,34 @@ You can also configure `senseaudio.temperature` and `senseaudio.top_p` directly 
 
 This extension adds **extended vision understanding** capability to **text-only models** that do not natively support vision. When you send a message with an image to these models, they can call a vision-capable model to describe the image, and then answer based on that description.
 
-You can configure the default vision model and whether to enable thinking when describing images. By default, Kimi K2.6 is used to describe images. You can also pick a vision model from a dynamic list (models reported as `supports_vision=true` from `/v1/models`, e.g. `kimi-k2.5` / `kimi-k2.6` / `kimi-k2.7-code` / `qwen3.8-max` / `seed-2.1-turbo` / `seed-2.1-pro`) via the **`SenseAudio: Select Vision Proxy Model`** command instead of typing the ID by hand. Falls back to manual input when the API is unavailable.
+You can configure the default vision model and whether to enable thinking when describing images. By default, `qwen3.6-35b-a3b` is used to describe images. You can also pick a vision model from a dynamic list via the **`SenseAudio: Select Vision Proxy Model`** command instead of typing the ID by hand — the list is built from the live `/v1/models` response, with vision capability resolved through [models.dev](https://models.dev) (the platform's `/v1/models` does not return a `supports_vision` flag). Falls back to manual input when the API is unavailable.
 
 > **Scope note — how images reach the vision proxy**: the `ask_image` proxy applies to images **you paste/attach manually into the chat** (the extension declares `imageInput: true` so VS Code forwards image data to it, and non-vision models delegate to the vision proxy model). It does **not** apply to screenshots taken by VS Code's **built-in screenshot tool** (e.g. in agent mode) — screenshot analysis is handled internally by the Copilot Chat framework using GitHub Copilot's own vision models, which is outside a third-party provider's control. If your Copilot plan's vision model is unavailable, the built-in screenshot tool reports "vision model query unavailable"; this does **not** affect manual image pasting, which still works through the extension's proxy.
 
 ### Model List
 
-The extension ships with built-in definitions for the following SenseAudio chat models (sourced from the [model page](https://docs.senseaudio.cn/guides/account/model-list-billing)):
+The extension ships with built-in definitions for the following SenseAudio chat models (verified against the live `/v1/models` endpoint on 2026-09-29; specs from the [model page](https://docs.senseaudio.cn/guides/account/model-list)):
 
-| Model ID | Context | Max Output | Vision | Responses API |
-|----------|---------|-----------|--------|--------------|
-| `deepseek-v4-pro` | 1M | 384K | ❌ | ❌ |
-| `deepseek-v4-flash` | 1M | 384K | ❌ | ❌ |
-| `deepseek-v4-flash-0731` | 1M | 384K | ❌ | ✅ |
-| `glm-5.2` | 1M | 128K | ❌ | ❌ |
-| `glm-5.1` | 200K | 128K | ❌ | ❌ |
-| `glm-5` | 1M | 128K | ❌ | ❌ |
-| `kimi-k2.7-code`¹ | 256K | 128K | ✅ | ❌ |
-| `kimi-k2.6` | 256K | 128K | ✅ | ❌ |
-| `kimi-k2.5` | 256K | 64K | ✅ | ❌ |
-| `mimo-v2.5-pro` | 256K | 256K | ❌ | ❌ |
-| `minimax-m2.7` | 200K | 192K | ❌ | ❌ |
-| `minimax-m2.5` | 200K | 200K | ❌ | ❌ |
-| `qwen3.7-max`² | 1M | 131.1K | ❌ | ✅ |
-| `qwen3.8-max`³ | 1M | 131.1K | ✅ | ✅ |
+| Model ID | Context | Max Output | Vision |
+|----------|---------|-----------|--------|
+| `senseaudio-s2` | 1M | 128K | ❌ |
+| `senseaudio-s2-flash` | 256K | 64K | ❌ |
+| `senseaudio-s2-lite` | 256K | 64K | ❌ |
+| `sensenova-6.8-flash-lite`¹ | 256K | 64K | ❌ |
+| `qwen3.8-27b` | 256K | 32K | ✅ |
+| `qwen3.6-35b-a3b` | 256K | 64K | ✅ |
+| `deepseek-v4.1-flash` | 1M | 384K | ✅ |
+| `deepseek-v4-flash-0731` | 1M | 384K | ❌ |
+| `glm-5.3-flash` | 1M | 128K | ✅ |
 
-> All models support the OpenAI-compatible protocol. The **Responses API** column shows which models additionally support the Responses protocol (supports_responses=true); most models also support Anthropic (supports_anthropic=true). Protocol capability is **detected dynamically** at startup from `GET /v1/models` — no model IDs are hardcoded. In `auto` mode, priority: Responses (if `enableResponsesApi` enabled) > Anthropic (if `enableAnthropicApi` enabled) > OpenAI.
+> ¹ The official docs table lists `—` for every spec of this model, and it is absent from models.dev / OpenRouter. 256K / 64K is assumed (same class as S2-Flash/Lite); revisit if the platform publishes real values.
+
+> All models support the OpenAI-compatible protocol. Protocol capability (Responses / Anthropic) is **detected dynamically** at startup from `GET /v1/models` — no model IDs are hardcoded. In `auto` mode, priority: Responses (if `enableResponsesApi` enabled) > Anthropic (if `enableAnthropicApi` enabled) > OpenAI.
 > [!WARNING]
 > The Anthropic protocol has compatibility issues with some models (e.g. DeepSeek: forced thinking + temperature/top_p returns 400 "请求参数组合无效"). **The OpenAI-compatible format is recommended**; use Anthropic only when you specifically need the native Messages format.
-> ¹ `kimi-k2.7-code` does not support temperature/top_p parameters.
-> ¹⁰ `kimi-k2.6` only accepts `top_p=0.95` (400 "field TopP invalid, only 0.95 is allowed for this model" otherwise, tested 2026-09-19). The extension automatically overrides any user/preset top_p with 0.95 for this model.
-> ² `qwen3.7-max` does not support the Anthropic protocol (supports_anthropic=false).
-> ³ `qwen3.8-max` (in testing) supports text + image input and the Responses protocol natively.
 
 > [!TIP]
-> Automatic model discovery is enabled by default: the extension fetches the live model list from `GET /v1/models` and hides models that are not available on your account. Image-generation models (`qwen-image-2.0`, `wan2.7-image`) are excluded from the picker.
+> Automatic model discovery is enabled by default: the extension fetches the live model list from `GET /v1/models` and hides models that are not available on your account. Image-generation models (`senseaudio-image-2.0`, `doubao-seedream-5-0`, `sensenova-u1-fast`) are excluded from the picker.
 
 ### Configuration
 
@@ -116,7 +109,7 @@ Available in `settings.json`:
 {
   "senseaudio.apiMode": "auto",
   "senseaudio.commitLanguage": "auto",
-  "senseaudio.commitModel": "deepseek-v4-flash",
+  "senseaudio.commitModel": "glm-5.3-flash",
   "senseaudio.commitMessagePrompt": "",
   "senseaudio.requestTimeout": 600000,
   "senseaudio.recentCommitsCount": 10,
@@ -134,13 +127,13 @@ Available in `settings.json`:
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `senseaudio.commitLanguage` | `auto` | Language for Git commit messages. When set to `auto`, the language is detected from recent commit history (defaults to English if no history exists). |
-| `senseaudio.commitModel` | `deepseek-v4-flash` | Model ID used for commit message generation. |
+| `senseaudio.commitModel` | `glm-5.3-flash` | Model ID used for commit message generation. |
 | `senseaudio.commitMessagePrompt` | `""` | Custom system prompt for commit message generation. |
 | `senseaudio.requestTimeout` | `600000` | Maximum time (ms) for a single API request. Default is 600000 (10 minutes). Increase if long responses time out. |
 | `senseaudio.recentCommitsCount` | `10` | Number of recent commits to analyze for style reference when generating commit messages. Set to 0 to disable. |
 | `senseaudio.commitIncludeCommitDiff` | `false` | Include the actual code changes (diff) of recent commits in the style reference, helping the model generate messages that better match the project's commit style. |
 | `senseaudio.commitAttachContextFiles` | `true` | Attach the content of AGENTS.md and README.md from the repository root as additional context for commit message generation, helping the model better understand the project. |
-| `senseaudio.visionProxyModel` | `kimi-k2.6` | Vision model used by the `ask_image` tool when the selected model does not support vision. |
+| `senseaudio.visionProxyModel` | `qwen3.6-35b-a3b` | Vision model used by the `ask_image` tool when the selected model does not support vision. |
 | `senseaudio.visionProxyThinking` | `false` | Enable thinking/reasoning in the vision proxy model when answering image queries. |
 | `senseaudio.enableAutoModelDiscovery` | `true` | Automatically fetch the live model list from `GET /v1/models` and hide models unavailable on your account. |
 | `senseaudio.syncModelsOnStartup` | `true` | Check for new SenseAudio models on startup, at most once per day. Sync results are reported as a single line in the "SenseAudio" Output channel. |
@@ -232,41 +225,34 @@ AGPL-3.0 License. This project builds upon the architecture of [opencode-go-copi
 
 本插件为**不支持视觉理解**的**纯文本模型**添加了**扩展视觉理解**功能，当你向这些模型发送带有图片的信息时，他们可以调用支持视觉理解的模型为图片输出描述，然后再回答。
 
-通过配置文件可更改默认使用的模型以及是否在描述图片时启用思考。默认情况下，将使用 Kimi K2.6 描述图片。也可以通过 **`SenseAudio: 选择视觉代理模型`** 命令从动态列表中挑选视觉模型（来自 `/v1/models` 中 `supports_vision=true` 的模型，实测含 `kimi-k2.5` / `kimi-k2.6` / `kimi-k2.7-code` / `qwen3.8-max` / `seed-2.1-turbo` / `seed-2.1-pro`），无需手填模型 ID；API 不可用时回退为手动输入。
+通过配置文件可更改默认使用的模型以及是否在描述图片时启用思考。默认情况下，将使用 `qwen3.6-35b-a3b` 描述图片。也可以通过 **`SenseAudio: 选择视觉代理模型`** 命令从动态列表中挑选视觉模型，无需手填模型 ID——列表来自实时 `/v1/models` 响应，视觉能力经 [models.dev](https://models.dev) 判定（平台的 `/v1/models` 不返回 `supports_vision` 标记）；API 不可用时回退为手动输入。
 
 > **适用范围说明 —— 图片如何到达视觉代理**：`ask_image` 代理作用于**你在聊天中手动粘贴/附带**的图片（扩展声明 `imageInput: true`，VS Code 会将图片数据传给扩展，非视觉模型再委托给视觉代理模型）。它**不覆盖** VS Code **内置截图工具**拍摄的截图（如 agent 模式下的截图）——截图分析由 Copilot Chat 框架内部使用 GitHub Copilot 自带的视觉模型完成，第三方提供商无法接管。如果你的 Copilot 套餐的视觉模型不可用，内置截图工具会提示"视觉模型查询暂不可用"；这**不影响**手动粘贴图片，后者仍会通过扩展的代理正常工作。
 
 ### 模型列表
 
-扩展内置了以下 SenseAudio Chat 模型定义（来源：[模型页](https://docs.senseaudio.cn/guides/account/model-list-billing)）：
+扩展内置了以下 SenseAudio Chat 模型定义（2026-09-29 对照实时 `/v1/models` 核实；规格取自[模型页](https://docs.senseaudio.cn/guides/account/model-list)）：
 
-| 模型 ID | 上下文 | 最大输出 | 视觉 | Responses API |
-|---------|--------|---------|------|--------------|
-| `deepseek-v4-pro` | 1M | 384K | ❌ | ❌ |
-| `deepseek-v4-flash` | 1M | 384K | ❌ | ❌ |
-| `deepseek-v4-flash-0731` | 1M | 384K | ❌ | ✅ |
-| `glm-5.2` | 1M | 128K | ❌ | ❌ |
-| `glm-5.1` | 200K | 128K | ❌ | ❌ |
-| `glm-5` | 1M | 128K | ❌ | ❌ |
-| `kimi-k2.7-code`¹ | 256K | 128K | ✅ | ❌ |
-| `kimi-k2.6` | 256K | 128K | ✅ | ❌ |
-| `kimi-k2.5` | 256K | 64K | ✅ | ❌ |
-| `mimo-v2.5-pro` | 256K | 256K | ❌ | ❌ |
-| `minimax-m2.7` | 200K | 192K | ❌ | ❌ |
-| `minimax-m2.5` | 200K | 200K | ❌ | ❌ |
-| `qwen3.7-max`² | 1M | 131.1K | ❌ | ✅ |
-| `qwen3.8-max`³ | 1M | 131.1K | ✅ | ✅ |
+| 模型 ID | 上下文 | 最大输出 | 视觉 |
+|---------|--------|---------|------|
+| `senseaudio-s2` | 1M | 128K | ❌ |
+| `senseaudio-s2-flash` | 256K | 64K | ❌ |
+| `senseaudio-s2-lite` | 256K | 64K | ❌ |
+| `sensenova-6.8-flash-lite`¹ | 256K | 64K | ❌ |
+| `qwen3.8-27b` | 256K | 32K | ✅ |
+| `qwen3.6-35b-a3b` | 256K | 64K | ✅ |
+| `deepseek-v4.1-flash` | 1M | 384K | ✅ |
+| `deepseek-v4-flash-0731` | 1M | 384K | ❌ |
+| `glm-5.3-flash` | 1M | 128K | ✅ |
 
-> 所有模型均支持 OpenAI 兼容协议。**Responses API** 列标注哪些模型额外支持 Responses 协议（supports_responses=true）；大多数模型也支持 Anthropic（supports_anthropic=true）。协议能力在启动时从 `GET /v1/models` **动态探测**——不硬编码模型 ID。auto 模式下优先级：Responses（若开启 `enableResponsesApi`）> Anthropic（若开启 `enableAnthropicApi`）> OpenAI。
+> ¹ 官方文档对该模型的所有规格列均为 `—`，且 models.dev / OpenRouter 均未收录；暂按同类模型（S2-Flash/Lite）假定 256K / 64K，待平台公布真实值后修正。
+
+> 所有模型均支持 OpenAI 兼容协议。协议能力（Responses / Anthropic）在启动时从 `GET /v1/models` **动态探测**——不硬编码模型 ID。auto 模式下优先级：Responses（若开启 `enableResponsesApi`）> Anthropic（若开启 `enableAnthropicApi`）> OpenAI。
 > [!WARNING]
 > Anthropic 协议对部分模型存在兼容性问题（如 DeepSeek：强制思考 + temperature/top_p 返回 400"请求参数组合无效"）。**建议优先使用 OpenAI 兼容格式**；仅在明确需要 Anthropic 原生 Messages 格式时使用。
-> ¹ `kimi-k2.7-code` 不支持设置 Temperature/Top-p 参数。
-> ¹⁰ `kimi-k2.6` 仅接受 `top_p=0.95`（传其他值返回 400 "field TopP invalid, only 0.95 is allowed for this model"，2026-09-19 实测）。插件会自动将该模型的 top_p 覆盖为 0.95，用户/预设配置的 top_p 不生效。
-> ² `qwen3.7-max` 不支持 Anthropic 协议（supports_anthropic=false）。
-> ³ `qwen3.8-max`（测试中）支持文本与图像输入，原生支持 Responses 协议。
 
 > [!TIP]
-> 自动模型发现默认开启：扩展会从 `GET /v1/models` 拉取实时模型列表，隐藏你账号下不可用的模型。图片生成模型（`qwen-image-2.0`、`wan2.7-image`）不会出现在选择器中。
+> 自动模型发现默认开启：扩展会从 `GET /v1/models` 拉取实时模型列表，隐藏你账号下不可用的模型。图片生成模型（`senseaudio-image-2.0`、`doubao-seedream-5-0`、`sensenova-u1-fast`）不会出现在选择器中。
 
 ### 调整模型温度
 
@@ -291,7 +277,7 @@ AGPL-3.0 License. This project builds upon the architecture of [opencode-go-copi
 {
   "senseaudio.apiMode": "auto",
   "senseaudio.commitLanguage": "auto",
-  "senseaudio.commitModel": "deepseek-v4-flash",
+  "senseaudio.commitModel": "glm-5.3-flash",
   "senseaudio.commitMessagePrompt": "",
   "senseaudio.requestTimeout": 600000,
   "senseaudio.recentCommitsCount": 10,
@@ -312,13 +298,13 @@ AGPL-3.0 License. This project builds upon the architecture of [opencode-go-copi
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
 | `senseaudio.commitLanguage` | `auto` | 提交消息语言。设为 `auto` 时将根据历史提交自动检测语言（无历史时默认英语）。 |
-| `senseaudio.commitModel` | `deepseek-v4-flash` | 用于生成提交消息的模型。 |
+| `senseaudio.commitModel` | `glm-5.3-flash` | 用于生成提交消息的模型。 |
 | `senseaudio.commitMessagePrompt` | `""` | 生成提交消息的自定义系统提示词。 |
 | `senseaudio.requestTimeout` | `600000` | 单个 API 请求的最大等待时间（毫秒）。默认 600000（10 分钟）。生成长内容超时时可增大此值。 |
 | `senseaudio.recentCommitsCount` | `10` | 生成提交消息时参考的近期提交数量，用于学习仓库提交风格。设为 0 可禁用。 |
 | `senseaudio.commitIncludeCommitDiff` | `false` | 在风格参考中包含历史提交的实际代码变更（diff），帮助模型生成更符合项目提交风格的消息。 |
 | `senseaudio.commitAttachContextFiles` | `true` | 将仓库根目录的 AGENTS.md 和 README.md 作为额外上下文附加到提交消息生成中，帮助模型更好地理解项目。 |
-| `senseaudio.visionProxyModel` | `kimi-k2.6` | 用于 ask_image 工具的视觉模型 ID。当所选模型不支持视觉时，该模型用于回答图片相关问题。 |
+| `senseaudio.visionProxyModel` | `qwen3.6-35b-a3b` | 用于 ask_image 工具的视觉模型 ID。当所选模型不支持视觉时，该模型用于回答图片相关问题。 |
 | `senseaudio.visionProxyThinking` | `false` | 在视觉代理模型回答图片查询时启用思考/推理功能。 |
 | `senseaudio.enableAutoModelDiscovery` | `true` | 自动从 `GET /v1/models` 拉取实时模型列表，隐藏你账号下不可用的模型。 |
 | `senseaudio.syncModelsOnStartup` | `true` | 启动时自动检查是否有新的 SenseAudio 模型（每日最多一次）。同步结果以一行日志输出到「SenseAudio」输出通道。 |

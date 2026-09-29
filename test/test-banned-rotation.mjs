@@ -79,10 +79,15 @@ function maskApiKey(key) {
 }
 
 // ── 模拟场景 ──
+// 纯逻辑模拟（不发任何网络请求），key 值仅作占位符。
+// 可用环境变量覆盖以便对照真实 key 的脱敏输出：
+//   SENSEAUDIO_TEST_BANNED_KEY / SENSEAUDIO_TEST_NORMAL_KEY
+const bannedKey = process.env.SENSEAUDIO_TEST_BANNED_KEY || "sk-banned-placeholder-0000000000000000000000000000000000000000000000aaaa";
+const normalKey = process.env.SENSEAUDIO_TEST_NORMAL_KEY || "sk-normal-placeholder-0000000000000000000000000000000000000000000000bbbb";
 const store = {
     keys: [
-        { value: "sk-wKCqmeWIcj3Oizq49evSMkJWGt9VCib618D3B0C2158646D6822dDeD06937Fd62", available: null }, // 封号 key
-        { value: "sk-ScLaQOktONddR9e19CuY3AaJ7ttfq8xL57D83d56Dc354f1c8930692e3803EdAc", available: null }, // 正常 key
+        { value: bannedKey, available: null }, // 封号 key
+        { value: normalKey, available: null }, // 正常 key
     ],
 };
 

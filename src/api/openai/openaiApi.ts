@@ -217,7 +217,7 @@ export class OpenaiApi extends CommonApi<OpenAIChatMessage, Record<string, unkno
                 out.push({ role, content: joinedText });
             }
         }
-        this._originalApiMessages = out as any[];
+        this._originalApiMessages = out;
         return out;
     }
 
@@ -283,7 +283,7 @@ export class OpenaiApi extends CommonApi<OpenAIChatMessage, Record<string, unkno
 
         // tools
         const toolConfig = convertToolsToOpenAI(options);
-        const toolsList: any[] = [];
+        const toolsList: unknown[] = [];
         if (toolConfig.tools) {
             toolsList.push(...toolConfig.tools);
         }

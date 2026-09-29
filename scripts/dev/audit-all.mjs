@@ -58,6 +58,14 @@ const srcText = new Map(srcFiles.map((f) => [f, fs.readFileSync(f, "utf8")]));
 // ── 2. 未使用的导出 ──
 {
     const all = [...srcText.entries()];
+    // Barrel 文件（仅做 `export { ... } from "./x"` 重导出）不算"使用"——
+    // 否则重导出行本身会被计为一次引用，导致「文档有、代码无」或真正无人
+    // 使用的导出被漏报（假阴性）。
+    const isBarrel = (text) => {
+        const lines = text.split("\n").filter((l) => l.trim() && !l.trim().startsWith("//") && !l.trim().startsWith("*") && !l.trim().startsWith("/*"));
+        return lines.length > 0 && lines.every((l) => /^export\s*(\{[^}]*\}|\*)\s*from\s*"/.test(l.trim()));
+    };
+    const barrels = new Set(all.filter(([, t]) => isBarrel(t)).map(([f]) => f));
     for (const [f, text] of all) {
         const names = new Set();
         for (const m of text.matchAll(/^export\s+(?:async\s+)?(?:function|const|class|interface|type)\s+([A-Za-z0-9_]+)/gm)) names.add(m[1]);
@@ -70,6 +78,8 @@ const srcText = new Map(srcFiles.map((f) => [f, fs.readFileSync(f, "utf8")]));
         for (const name of names) {
             let total = 0;
             for (const [g, gt] of all) {
+                // Barrel 重导出行不计入使用
+                if (barrels.has(g)) continue;
                 for (const line of gt.split("\n")) {
                     // 只跳过「该名字自身的声明行」，不要跳过所有 export 行
                     // （否则 `export interface X extends Y` / `export type Z = A | B`

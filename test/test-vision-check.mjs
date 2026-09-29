@@ -1,4 +1,6 @@
-// 生成合法 32x32 PNG 并测试 kimi-k2.6 视觉输入
+// 生成合法 32x32 PNG 并测试视觉模型输入
+// 用法：node test/test-vision-check.mjs <API_KEY> [MODEL_ID]
+//      或设置环境变量 SENSEAUDIO_API_KEY
 import { writeFileSync } from 'node:fs';
 
 // 最小合法 PNG：1x1 红色像素（标准 PNG 头）
@@ -43,18 +45,24 @@ function makePng(width, height) {
 
 const png = makePng(32, 32);
 const b64 = png.toString('base64');
-const KEY = 'sk-ScLaQOktONddR9e19CuY3AaJ7ttfq8xL57D83d56Dc354f1c8930692e3803EdAc';
+const KEY = process.argv[2] || process.env.SENSEAUDIO_API_KEY;
+if (!KEY) {
+    console.error('用法：node test/test-vision-check.mjs <API_KEY> [MODEL_ID]');
+    process.exit(1);
+}
+// 默认用当前平台的视觉模型（2026-09-29 实测支持图片输入）
+const MODEL = process.argv[3] || 'qwen3.6-35b-a3b';
 
 const r = await fetch('https://api.senseaudio.cn/v1/chat/completions', {
     method: 'POST',
     headers: { Authorization: `Bearer ${KEY}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-        model: 'kimi-k2.6',
+        model: MODEL,
         messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: `data:image/png;base64,${b64}` } }, { type: 'text', text: 'what color' }] }],
         stream: false,
         max_tokens: 16,
     }),
 });
 const t = await r.text();
-console.log('kimi-k2.6 vision (32x32 valid PNG):', r.status);
+console.log(`${MODEL} vision (32x32 valid PNG):`, r.status);
 console.log(t.slice(0, 300));

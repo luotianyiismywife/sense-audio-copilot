@@ -83,7 +83,7 @@ export function isKeyRotationError(err: unknown): boolean {
 
 /**
  * 判断错误是否为"瞬态类"（平台繁忙/限流，可能很快恢复 → 值得整轮自动重试）。
- * 匹配 `senseaudio.transientRetryStatusCodes`（默认 [429, 503]）中的状态码。
+ * 匹配 `senseaudio.transientRetryStatusCodes`（默认 [429, 500, 503]）中的状态码。
  * 与 `isKeyRotationError` 解耦：触发轮换的状态码与触发自动重试的状态码可分别配置。
  */
 export function isTransientRetryError(err: unknown): boolean {
@@ -136,7 +136,7 @@ export function getKeyRotationReason(err: unknown): string {
  * 获取 key 当前不可用的机器可读原因（供"全部 key 不可用"报错展示）：
  * - 瞬态冷却中（429/503）→ "rate_limited" / "server_error"
  * - 持久化不可用（available=false）→ "unavailable"
- * - 其他（未检测 / 余额不足 / 封号 / cookie 预检跳过）→ "balance"
+ * - 其他（未检测 / 余额不足 / 封号）→ "balance"
  */
 export function getKeyUnavailableReason(entry: ApiKeyEntry): string {
     const transient = getTransientExhaustedInfo(entry.value);

@@ -197,7 +197,7 @@ export class ResponsesApi extends CommonApi<ResponsesInputMessage, Record<string
             }
         }
 
-        this._originalApiMessages = out as any[];
+        this._originalApiMessages = out;
         return out;
     }
 

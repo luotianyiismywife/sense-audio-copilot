@@ -557,7 +557,6 @@ scripts/
 docs/
 ├── multi-api-key-design.md               # 多 Key 轮换与失效切换（当前实现）
 ├── plan-usage-design.md                  # 套餐用量与余额显示设计
-├── responses-api-issues.md               # Responses 协议已知问题
 └── archive/                              # 历史设计归档
     └── multi-api-key-design-v1.9-cookie-precheck.md  # 含已废弃 cookie 预检架构的旧版设计
 
@@ -878,11 +877,11 @@ key 轮换失败原因 → 人类可读标签（l10n key）：`balance`/`invalid
 - `buildSnapshot(info, now?)`（纯函数）：归一化为 `PlanUsageSnapshot`，含 `quotaWindow`（月度额度窗口）/ `rateLimitWindows`（5h+周）/ `balance` / `extraUsageEnabled` / 三态 `billingMode`（`plan`/`extra`/`free`）
 - `getPlanUsageCached(loginToken, force?)`：TTL 缓存 + **失败保留旧快照**（静默降级）+ **换 token 时旧账号快照立即失效**（`cachedToken` 跟踪，避免状态栏短暂显示他人数据）
 - `getPlanUsageSnapshot()`：同步读缓存（状态栏渲染用，不触发网络）
-- `getPlanUsageFetchStatus()` / `resetPlanUsageCache()`
+- `getPlanUsageFetchStatus()`：返回最近一次拉取状态（供命令区分 401 / 一般失败）
 - `classifyWindow(key, desc)`：宽容匹配各平台 key 命名（`5h`/`rolling`/`5小时`、`7d`/`week`/`周`、`30d`/`month`/`月`），无法识别回退 `other`
 - `getWindowLabel(window)`：`5H` / `Week` / `Month` / 原始 desc
 - `getWindowPercent(window)`：0-100+，`pendingCount` 计入已用，**不夹取上限**（超额如实显示 150%）
-- `isWindowExhausted(window)` / `isPlanExhausted(snapshot)`（**只看月度额度窗口**）/ `getBillingMode(snapshot)`
+- `isWindowExhausted(window)` / `isPlanExhausted(snapshot)`（**只看月度额度窗口**）
 - `getPrimaryWindow(snapshot)`：优先 5h 窗口（状态栏主文本用）
 - `formatResetDuration(epochSec, now?)`：`2H13M` / `45M`，过期返回空串
 - `formatUsageSummary` / `formatWindowLine`（`5H——65% (6,500 / 10,000 积分)`）/ `formatBillingModeLine`（三态说明）/ `formatBalanceSummary`
@@ -956,13 +955,10 @@ key 轮换失败原因 → 人类可读标签（l10n key）：`balance`/`invalid
 | `apiMode` | `"openai" \| "anthropic" \| "responses"` (可选) | API 格式模式 |
 
 #### `const BUILT_IN_MODELS: BuiltInModelDef[]`
-16 个内置模型定义常量数组（来源：[SenseAudio 模型页](https://docs.senseaudio.cn/guides/account/model-list-billing)；glm-5.3/glm-5.3-flash 于 2026-09-03 经 `/v1/models` 实测确认后内置化）。
+9 个内置模型定义常量数组（2026-09-29 对照实时 `/v1/models` 重写；规格取自[官方模型页](https://docs.senseaudio.cn/guides/account/model-list)，视觉能力取自 models.dev）。
 
 #### `getBuiltInModelInfos(): LanguageModelChatInformation[]`
 将内置模型定义转换为 VS Code 的模型信息列表。每个模型注册**一个条目**，带 `isUserSelectable: true` 确保在模型选择器中可见（VS Code 1.120+ 要求），并通过 `configurationSchema` 附加推理强度选择器（中文标签）。switchable 模型显示 `禁用思考/思考` 或 `禁用思考/高/最大`（可关闭推理）；adaptive 模型仅显示 `禁用思考/自动`；always 模型不显示 `禁用思考` 选项，仅在支持推理强度时显示强度选项。`maxInputTokens` 按真实上下文窗口的**可配置比例**声明（`getMaxInputTokensRatio()` 读取 `senseaudio.maxInputTokensRatio` 设置，默认 `1.0`，建议 `0.8`，`Math.floor` 取整，范围 0.1–1.0），使 VS Code 的 agent 自动压缩（约 90% 阈值）能在真实上下文的约 72%（比例 0.8 时）处触发；`context_length` / `max_completion_tokens` 保持真实值用于 API 请求体。
-
-#### `getBuiltInModelCount(): number`
-返回内置模型定义总数（BUILT_IN_MODELS.length）。
 
 #### `getBuiltInModelIds(): Set<string>`
 返回所有内置模型的 baseId 集合。供 `src/models/modelSync.ts` 在启动同步时对比 API 模型列表，检测不在内置列表中的新模型。

@@ -34,6 +34,18 @@ import { buildAllKeysUnavailableDetail, REASON_TEXT, tryTransientRetryRound } fr
  * Git commit message generator module.
  */
 
+/**
+ * Minimal shape of a VS Code Git extension repository.
+ *
+ * The Git extension's own types are not part of the public `vscode` API surface
+ * (they live in the extension's `api.d.ts`), so we declare the subset we use
+ * instead of falling back to `any`.
+ */
+interface GitRepository {
+    rootUri: vscode.Uri;
+    inputBox: { value: string };
+}
+
 let commitGenerationAbortController: AbortController | undefined;
 
 const DEFAULT_PROMPT = {
@@ -73,7 +85,7 @@ export async function generateCommitMsg(secrets: vscode.SecretStorage, scm?: vsc
     }
 }
 
-async function orchestrateWorkspaceCommitMsgGeneration(secrets: vscode.SecretStorage, repos: any[]) {
+async function orchestrateWorkspaceCommitMsgGeneration(secrets: vscode.SecretStorage, repos: GitRepository[]) {
     const reposWithChanges = await filterForReposWithChanges(repos);
 
     if (reposWithChanges.length === 0) {
@@ -106,8 +118,8 @@ async function orchestrateWorkspaceCommitMsgGeneration(secrets: vscode.SecretSto
     }
 }
 
-async function filterForReposWithChanges(repos: any[]) {
-    const reposWithChanges = [];
+async function filterForReposWithChanges(repos: GitRepository[]): Promise<GitRepository[]> {
+    const reposWithChanges: GitRepository[] = [];
 
     for (const repo of repos) {
         try {
@@ -122,8 +134,8 @@ async function filterForReposWithChanges(repos: any[]) {
     return reposWithChanges;
 }
 
-async function promptRepoSelection(repos: any[]) {
-    const repoItems = repos.map((repo) => ({
+async function promptRepoSelection(repos: GitRepository[]) {
+    const repoItems: (vscode.QuickPickItem & { repo: GitRepository | null })[] = repos.map((repo) => ({
         label: repo.rootUri.fsPath.split(path.sep).pop() || repo.rootUri.fsPath,
         description: repo.rootUri.fsPath,
         repo: repo,
@@ -132,7 +144,7 @@ async function promptRepoSelection(repos: any[]) {
     repoItems.unshift({
         label: "$(git-commit) Generate for all repositories with changes",
         description: `Generate commit messages for ${repos.length} repositories`,
-        repo: null as any,
+        repo: null,
     });
 
     return await vscode.window.showQuickPick(repoItems, {
@@ -140,7 +152,7 @@ async function promptRepoSelection(repos: any[]) {
     });
 }
 
-async function generateCommitMsgForRepository(secrets: vscode.SecretStorage, repository: any) {
+async function generateCommitMsgForRepository(secrets: vscode.SecretStorage, repository: GitRepository) {
     const inputBox = repository.inputBox;
     const repoPath = repository.rootUri.fsPath;
     const gitDiff = await getGitDiff(repoPath);
@@ -175,7 +187,7 @@ async function ensureApiKeyEntry(secrets: vscode.SecretStorage): Promise<ApiKeyE
     return undefined;
 }
 
-async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff: string, inputBox: any, repoPath?: string) {
+async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff: string, inputBox: { value: string }, repoPath?: string) {
     const startTime = Date.now();
     let modelId: string | undefined;
     try {
