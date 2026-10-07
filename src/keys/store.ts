@@ -6,6 +6,7 @@ import {
     getRotationIndex,
     getStoreCache,
     getTransientExhaustedMap,
+    notifyApiKeyStoreChanged,
     setRotationIndex,
     setStoreCache,
 } from "./state";
@@ -90,6 +91,7 @@ export async function saveApiKeyStore(secrets: vscode.SecretStorage, store: ApiK
         // ignore legacy key deletion failures (idempotent retry on next save)
     }
     setStoreCache(store);
+    notifyStoreWrite();
 }
 
 /** 使内存缓存失效（外部修改 SecretStorage 时调用） */
@@ -156,6 +158,10 @@ export async function addApiKeys(
         await saveApiKeyStore(secrets, store);
     }
     return { added, updated };
+}
+
+function notifyStoreWrite(): void {
+    notifyApiKeyStoreChanged();
 }
 
 /** 删除 key；自动修正 activeIndex 与轮询游标，并清理该 key 的瞬态冷却条目 */

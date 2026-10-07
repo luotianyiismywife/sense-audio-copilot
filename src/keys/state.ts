@@ -19,6 +19,9 @@ let rotationIndex = 0;
 /** 瞬态失效表：429 限流等"可能恢复"的失效，带冷却时间 */
 const transientExhausted = new Map<string, { exhaustedAt: number; reason: string }>();
 
+/** API key store 变更监听器：用于触发自动云同步 push */
+const apiKeyStoreChangeListeners = new Set<() => void>();
+
 export function getStoreCache(): ApiKeyStore | null {
     return storeCache;
 }
@@ -37,4 +40,17 @@ export function setRotationIndex(index: number): void {
 
 export function getTransientExhaustedMap(): Map<string, { exhaustedAt: number; reason: string }> {
     return transientExhausted;
+}
+
+export function onApiKeyStoreChanged(listener: () => void): () => void {
+    apiKeyStoreChangeListeners.add(listener);
+    return () => {
+        apiKeyStoreChangeListeners.delete(listener);
+    };
+}
+
+export function notifyApiKeyStoreChanged(): void {
+    for (const listener of [...apiKeyStoreChangeListeners]) {
+        listener();
+    }
 }

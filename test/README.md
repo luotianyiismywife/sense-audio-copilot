@@ -15,6 +15,9 @@
 | `test-vision-history.mjs` | 离线 | 跨轮视觉历史编解码 + 双 API 转换器闭环（含 DeepSeek 空 reasoning_content 回归） |
 | `test-anthropic-tool-result-merge.mjs` | 离线 | Anthropic 连续工具结果合并（issue #87：3 个并行 tool_use 结果合并为单条 user 消息） |
 | `test-batch-import.mjs` | 离线 | **批量导入解析器**（14 项断言）：`key---cookie---备注;` 格式、空字段、备注含分隔符、容错 |
+| `test-cloud-sync-auto-push.mjs` | 离线 | **云同步 payload 去重**（16 项断言）：`syncPayloadHasChanged` 空值/版本/长度/逐字段/顺序分支，`undefined` 与 `""` 等价、`updatedAt` 不参与比较 |
+| `test-cloud-sync-flow.mjs` | 离线 | **云同步 push/pull 集成**（22 项断言）：mock fetch + mock vscode 驱动生产 `pushToCloud`/`pullFromCloud`（新建/PATCH/短路/合并/静默/缓存失效回退/服务端时间戳回归） |
+| `test-cloud-sync-e2e.mjs` | 联网 | **云同步真实端到端**（16 项断言）：真实 GitHub Gist API 驱动生产代码，验证请求体格式/响应结构/`updated_at`/内容往返；需 gist 权限凭据，无凭据时 SKIP |
 | `test-banned-detect.mjs` | 离线 | 封号检测（纯逻辑模拟，无网络请求） |
 | `test-banned-rotation.mjs` | 离线 | 封号轮换（纯逻辑模拟，无网络请求） |
 | `test-apply-token.mjs` | 联网 | public_key 换发短期 token（`auth.senseaudio.cn`） |
@@ -35,8 +38,14 @@ node test/test-transient-retry.mjs
 node test/test-vision-history.mjs
 node test/test-anthropic-tool-result-merge.mjs
 node test/test-batch-import.mjs
+node test/test-cloud-sync-auto-push.mjs
+node test/test-cloud-sync-flow.mjs
 node test/test-banned-detect.mjs
 node test/test-banned-rotation.mjs
+
+# 云同步真实端到端（需 GitHub gist 权限凭据；无凭据时 SKIP 退出 0）
+npm run test:e2e
+# 凭据来源：GITHUB_TOKEN / GH_TOKEN 环境变量，或 `gh auth token`
 
 # 联网测试（需 API Key，从参数或环境变量读取）
 node test/api-tests.mjs <API_KEY> [openai|anthropic|responses|all]

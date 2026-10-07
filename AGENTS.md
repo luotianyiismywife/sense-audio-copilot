@@ -511,7 +511,8 @@ src/
 ├── ui/
 │   └── statusBar.ts                      # 状态栏管理（受 enableThirdPartyTokenIndicator 控制）
 ├── cloud/
-│   └── cloudSync.ts                      # 云同步（GitHub Gist）：推送/拉取/启动自动拉取
+│   ├── cloudSync.ts                      # 云同步（GitHub Gist）：推送/拉取/启动自动拉取
+│   └── syncPayload.ts                   # 纯函数：Gist payload 对比（无 VS Code 运行时依赖，便于 Node 回归测试）
 ├── gitCommit/
 │   ├── commitMessageGenerator.ts         # Git 提交消息生成
 │   └── gitUtils.ts                       # Git 工具函数
@@ -570,6 +571,9 @@ test/                                     # 测试脚本（运行前需 npm run 
 ├── test-vision-history.mjs               # 跨轮视觉历史编解码 + 双 API 转换器闭环测试
 ├── test-anthropic-tool-result-merge.mjs  # Anthropic 连续工具结果合并测试（issue #87 场景）
 ├── test-batch-import.mjs                 # 批量导入解析器测试（14 项断言）
+├── test-cloud-sync-auto-push.mjs         # 云同步 payload 去重测试（16 项断言，纯函数无 vscode 依赖）
+├── test-cloud-sync-flow.mjs              # 云同步 push/pull 集成测试（22 项断言，mock fetch + mock vscode）
+├── test-cloud-sync-e2e.mjs               # 云同步真实端到端测试（16 项断言，真实 GitHub Gist + 生产代码，需 gist 权限凭据）
 ├── test-apply-token.mjs                  # 令牌应用测试
 ├── test-banned-detect.mjs                # 封号检测测试
 ├── test-banned-rotation.mjs              # 封号轮换测试
@@ -634,7 +638,8 @@ test/                                     # 测试脚本（运行前需 npm run 
 | `core/utils.ts` | ~294 | 工具函数 (重试、角色映射、工具转换等) |
 | `core/versionManager.ts` | ~31 | 扩展版本信息 |
 | `ui/statusBar.ts` | ~330 | 状态栏创建、更新、累计计数器；**套餐用量渲染**（主文本 `5H 65%` / 额度耗尽改显余额、悬停提示三窗口+倒计时+余额+计费模式）、后台轮询（`startUsagePolling`/`refreshPlanUsage`）、`refreshPlanUsageNow`（点击状态栏/命令强制刷新）；`showTokenStatusBar()` 受 `senseaudio.enableThirdPartyTokenIndicator`（**默认关闭**）控制 |
-| `cloud/cloudSync.ts` | ~308 | 云同步（GitHub Gist）：`pushToCloud` / `pullFromCloud` / `autoPullOnStartup` |
+| `cloud/cloudSync.ts` | ~308 | 云同步（GitHub Gist）：`pushToCloud` / `pullFromCloud` / `autoPullOnStartup` / `registerCloudSyncAutoPush` |
+| `cloud/syncPayload.ts` | ~25 | 纯函数 `syncPayloadHasChanged`：比较本地/云端 Gist payload，供 Node 回归测试与云同步去重逻辑共用 |
 | `gitCommit/commitMessageGenerator.ts` | ~441 | Git 提交消息生成逻辑（多 key 轮换循环） |
 | `gitCommit/gitUtils.ts` | ~223 | Git 命令封装 |
 | `tokenizer/tokenizerManager.ts` | ~97 | o200k_base 分词器管理 (含 LRU 缓存) |
@@ -655,9 +660,12 @@ test/                                     # 测试脚本（运行前需 npm run 
 | `scripts/scaffold/scaffold.mjs` | ~170 | **项目脚手架**（2026-10-05 新增）：从本仓库抽取可复用骨架生成新 VS Code 扩展项目。复制通用骨架（tsconfig / eslint / .gitignore / .vscode 调试配置 / scripts/build 四件套），按参数生成 package.json（通用 scripts + 依赖，contributes 留空）、最小 `src/extension.ts`、AGENTS.md 骨架（编译铁律四条）、README 与 test/ 占位。用法：`node scripts/scaffold/scaffold.mjs --name <ext-name> --publisher <pub> --dir <target> [--desc "..."]`。目标已存在 package.json 时拒绝覆盖；不复制业务代码（src/ 业务逻辑、test/ 测试、resources/、docs/、nls 文件） |
 | `test/api-tests.mjs` | ~282 | 三协议 API 完整测试脚本（OpenAI/Anthropic/Responses，第 9b 项含生产 400 回归用例） |
 | `test/test-plan-usage.mjs` | ~250 | **套餐用量快照测试**（29 项断言）：窗口归一化（各平台 key 命名）、百分比（pending 计入/超额不截断）、超额判定（只看月度窗口）、三态计费模式、倒计时、摘要格式化、**真实 API 夹具回归**（代金券 200 倍换算 bug）；运行前需 `npm run compile` |
-| `test/test-transient-retry.mjs` | ~120 | **瞬态错误分类测试**（13 项断言）：500 命中瞬态重试但**不**命中 key 轮换（平台问题不换 key）、429/503 两者都命中（回归）、400/403 都不命中、401/402 仅轮换、失效原因提取；运行前需 `npm run compile` |
+| `test/test-transient-retry.mjs` | ~120 | **瞬态错误分类测试**（18 项断言）：500 命中瞬态重试但**不**命中 key 轮换（平台问题不换 key）、429/503 两者都命中（回归）、400/403 都不命中、401/402 仅轮换、失效原因提取；运行前需 `npm run compile` |
 | `test/test-vision-history.mjs` | ~155 | 跨轮视觉历史编解码 + 双 API 转换器闭环测试（源自上游 opencode-go-copilot v1.9.2，含 DeepSeek 空 reasoning_content 回归用例；运行前需 `npm run compile`） |
 | `test/test-anthropic-tool-result-merge.mjs` | ~168 | Anthropic 连续工具结果合并测试（源自上游，issue #87 场景：3 个并行 tool_use 结果合并为单条 user 消息；运行前需 `npm run compile`） |
+| `test/test-cloud-sync-auto-push.mjs` | ~90 | **云同步 payload 去重测试**（16 项断言）：`syncPayloadHasChanged` 的空值/版本/长度/逐字段（value/cookie/label）/顺序分支，以及 `undefined` 与 `""` 等价、`updatedAt` 不参与比较；纯函数无 `vscode` 依赖，运行前需 `npm run compile` |
+| `test/test-cloud-sync-flow.mjs` | ~330 | **云同步 push/pull 集成测试**（22 项断言）：通过 `Module._load` 钩子注入 `vscode` mock + mock `fetch`，驱动真实 `pushToCloud`/`pullFromCloud` 流程——push 新建/PATCH/无变更短路/空 store 警告、**push 记录服务端 `updated_at`（回归：曾记录客户端时间导致 push 后必然多拉一次）**、pull 合并（cookie/label 覆盖 + 可用性保留 + 追加新 key）/静默跳过/缓存 gist 失效回退；运行前需 `npm run compile` |
+| `test/test-cloud-sync-e2e.mjs` | ~250 | **云同步真实端到端测试**（16 项断言，`npm run test:e2e`）：用**真实 GitHub Gist API** 驱动生产 `pushToCloud`/`pullFromCloud`，验证 mock 无法覆盖的部分（真实请求体格式/响应结构/`updated_at`/内容往返）。安全设计：创建**专用测试 Gist**（描述带随机后缀）并预置其 id 到 `globalState`，**绝不触碰用户真实同步 Gist**；finally 中删除测试 Gist。凭据从 `GITHUB_TOKEN`/`GH_TOKEN` 或 `gh auth token` 读取，无凭据时 SKIP 退出 0；运行前需 `npm run compile` |
 | `test/test-*.mjs`（其余） | — | 令牌应用 / 封号检测 / 封号轮换 / 模型差异 / Responses 复检 / 视觉能力检查等专项测试 |
 
 ---
@@ -918,7 +926,10 @@ key 轮换失败原因 → 人类可读标签（l10n key）：`balance`/`invalid
 按 description 标记（`senseaudio-copilot key sync (do not edit manually)`）+ 文件名（`senseaudio-keys.json`）在用户 Gist 列表中查找同步 Gist（前 3 页，每页 100）。
 
 #### `fetchSyncPayload(session, gistId): Promise<SyncPayload | undefined>`（模块级私有）
-读取 Gist 文件内容并解析为负载（`{ version: 1, updatedAt, keys }`）；缺失/损坏返回 undefined。
+读取 Gist 文件内容并解析为负载（`{ version: 1, updatedAt, keys }`）；缺失/损坏返回 undefined。**优先使用 GitHub 服务端 `updated_at` 覆盖负载内时间戳**（消除客户端时钟偏差导致的漏拉）。
+
+#### `readGistUpdatedAt(resp): Promise<string | undefined>`（模块级私有）
+从 Gist API 响应（PATCH/POST）中读取服务端 `updated_at`，供 push 侧记录 `lastCloudSyncAt`；解析失败返回 undefined（调用方回退本地时间）。
 
 #### `normalizeEntries(keys): SyncedKeyEntry[]`（模块级私有）
 规范化同步条目：过滤空 value，cookie/label 去空白。
@@ -926,14 +937,20 @@ key 轮换失败原因 → 人类可读标签（l10n key）：`balance`/`invalid
 #### `buildPayload(keys): SyncPayload`（模块级私有）
 将本地 store 序列化为同步负载（仅 value/cookie/label，可用性状态不同步）。
 
-#### `pushToCloud(context): Promise<void>`
-推送本地 key/cookie/备注 到云端 Gist（`senseaudio.syncPush` 命令）。未登录时弹登录界面；无 key 时警告返回。**push/pull 模块级互斥**（`syncInFlight`，重叠时警告返回，防止 pull 用旧 store 快照覆盖 push 结果）。Gist 定位：缓存 gist id（PATCH 404 回退）→ 按描述查找 → 创建新 Gist（`public: false`）。**POST 响应解析不出 id 时抛错走 catch 分支**（不更新时间戳、不报成功），避免"假成功"污染 `lastCloudSyncAt`。成功后更新 `globalState` 的 `senseaudio.lastCloudSyncAt` 并弹窗提示。
+#### `pushToCloud(context, silent = false): Promise<void>`
+推送本地 key/cookie/备注 到云端 Gist（`senseaudio.syncPush` 命令）。未登录时在非 silent 模式下弹登录界面；无 key 时警告返回。**push/pull 模块级互斥**（`syncInFlight`，重叠时警告返回，防止 pull 用旧 store 快照覆盖 push 结果）。**自动推送**：`cloudSyncAutoPush` 开启时，用户 key 管理操作触发 `autoPushDebounced()`，2–3 秒去抖后重用此函数；本地 payload 与云端相同则直接短路不写 Gist，不更新 `updatedAt`，避免无变更反复推送。**跨窗口锁**：`globalState` 的 `senseaudio.cloudSyncLockUntil` 防止两个窗口同时写 Gist；自动推送失败仅记录日志不弹窗。Gist 定位：缓存 gist id（PATCH 404 回退）→ 按描述查找 → 创建新 Gist（`public: false`）。**POST 响应解析不出 id 时抛错走 catch 分支**（不更新时间戳、不报成功），避免"假成功"污染 `lastCloudSyncAt`。**`lastCloudSyncAt` 记录服务端时间戳**（`readGistUpdatedAt` 从 PATCH/POST 响应的 `updated_at` 读取，响应缺失时回退本地时间）——与 pull 侧 `fetchSyncPayload` 用服务端时间覆盖 `updatedAt` 的口径一致，消除客户端时钟偏差导致的"push 后下一次启动必然多拉一次"问题。成功后弹窗提示。
 
 #### `pullFromCloud(context, silent = false): Promise<boolean>`
 从云端 Gist 拉取 key/cookie/备注 覆盖本地（`senseaudio.syncPull` 命令）。**push/pull 模块级互斥**（`syncInFlight`，silent 模式静默返回 false）。合并策略：云端为源——按 key 值对齐，云端条目覆盖本地 cookie/label，云端有本地无的追加、本地有云端无的删除；可用性状态（available/lastCheckedAt）为本地数据按 key 值保留；activeIndex 按 key 值跟随。无变更时不写 store 仅更新同步时间戳。**缓存 gist id 失效回退**：缓存 id 拉取失败（404 等，Gist 在其他机器被删除重建）时清缓存回退 `findSyncGist` 重新查找，避免自动拉取从此每次启动静默失败。**时间戳用 GitHub 服务端时间**：`fetchSyncPayload` 优先取 Gist API 的 `updated_at` 覆盖负载内时间戳，消除客户端时钟偏差导致的漏拉。`silent=true`（启动自动拉取）时：未登录/无 Gist/云端无更新（`updatedAt <= lastSyncAt`）均静默返回 false，拉取成功弹窗提示。
 
 #### `autoPullOnStartup(context): void`
 启动自动拉取入口（fire-and-forget，不阻塞激活）。读取 `senseaudio.cloudSyncAutoPull` 配置（默认开启），关闭则直接返回；未登录 GitHub 时静默跳过不弹登录界面。
+
+#### `registerCloudSyncAutoPush(context): void`
+注册 API Key store 变更监听：当 SecretStorage 写入后在 2.5s 去抖触发 `pushToCloud(context, true)`，但会跳过 `suppressAutoPush`（pull 触发的本地写入）以及无效配置状态，避免回环。`flushPendingAutoPush()` 负责在扩展停用前清理未执行定时器。
+
+#### `syncPayloadHasChanged(local, remote): boolean`
+纯函数：比较本地与云端 Gist payload 的 `version`、条目数以及每个 key 的 `value/cookie/label`，相同返回 false，任一差异返回 true。避免在 Node 离线测试中加载 `vscode` 模块，并让云同步去重逻辑与回归测试共享一份实现。
 
 ---
 
@@ -1799,11 +1816,16 @@ npx tsc --noEmit
 # 持续监视模式
 npm run watch
 
-# 离线测试（5 个，无需 API Key；先自动 compile）
+# 离线测试（7 个，无需 API Key；先自动 compile）
 npm test
 # 等效于: npm run compile && npm run test:offline
 npm run test:offline
-# 等效于: node test/test-plan-usage.mjs && node test/test-transient-retry.mjs && node test/test-vision-history.mjs && node test/test-anthropic-tool-result-merge.mjs && node test/test-batch-import.mjs
+# 等效于: node test/test-plan-usage.mjs && node test/test-transient-retry.mjs && node test/test-vision-history.mjs && node test/test-anthropic-tool-result-merge.mjs && node test/test-batch-import.mjs && node test/test-cloud-sync-auto-push.mjs && node test/test-cloud-sync-flow.mjs
+
+# 云同步真实端到端测试（需 GitHub gist 权限凭据；无凭据时 SKIP 退出 0）
+npm run test:e2e
+# 等效于: node test/test-cloud-sync-e2e.mjs
+# 凭据来源：GITHUB_TOKEN / GH_TOKEN 环境变量，或 `gh auth token`
 
 # 打包 VSIX
 npm run build
