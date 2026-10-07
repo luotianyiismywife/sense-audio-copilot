@@ -549,6 +549,10 @@ scripts/
     ├── check-settings.mjs                # 设置项一致性核对（声明 vs 使用，挂到 compile）
     └── audit-all.mjs                     # 完整审计（npm run audit，7 项检查）
 
+scripts/
+└── scaffold/
+    └── scaffold.mjs                      # 项目脚手架（从本仓库骨架生成新 VS Code 扩展项目）
+
 .vscode/                                  # 调试配置（F5 启动扩展宿主）
 ├── launch.json                           # Run Extension（preLaunchTask: npm: compile）
 └── tasks.json                            # compile / watch / test:offline 任务
@@ -648,6 +652,7 @@ test/                                     # 测试脚本（运行前需 npm run 
 | `scripts/dev/check-new-models.mjs` | ~244 | 检查 API 新模型（对比内置清单） |
 | `scripts/dev/check-settings.mjs` | ~70 | **设置项一致性核对**：扫描 `src/**/*.ts` 中所有 `getConfiguration` 读取（含带前缀 / 无前缀 / 常量键 / **嵌套配置节**四种形式），与 `package.json` 的 `contributes.configuration` 双向 diff，输出「已用未声明」与「已声明未用」。**已挂到 `npm run compile`**（有漂移则编译失败）。用于防止设置项漂移（曾发现 `enableAutoModelDiscovery` 声明了但代码从未读取、`senseaudio.retry.*` 四个设置从未声明） |
 | `scripts/dev/audit-all.mjs` | ~150 | **完整审计**（`npm run audit`）：7 项检查一次跑完——① 设置项漂移 ② 未使用导出 ③ 未使用 l10n 键 ④ `package.nls.json` / `package.nls.zh-cn.json` 键集合一致性 ⑤ 命令声明 vs 注册 ⑥ 文档引用的文件路径是否存在 ⑦ 测试脚本引用的 `out/` 路径是否存在 |
+| `scripts/scaffold/scaffold.mjs` | ~170 | **项目脚手架**（2026-10-05 新增）：从本仓库抽取可复用骨架生成新 VS Code 扩展项目。复制通用骨架（tsconfig / eslint / .gitignore / .vscode 调试配置 / scripts/build 四件套），按参数生成 package.json（通用 scripts + 依赖，contributes 留空）、最小 `src/extension.ts`、AGENTS.md 骨架（编译铁律四条）、README 与 test/ 占位。用法：`node scripts/scaffold/scaffold.mjs --name <ext-name> --publisher <pub> --dir <target> [--desc "..."]`。目标已存在 package.json 时拒绝覆盖；不复制业务代码（src/ 业务逻辑、test/ 测试、resources/、docs/、nls 文件） |
 | `test/api-tests.mjs` | ~282 | 三协议 API 完整测试脚本（OpenAI/Anthropic/Responses，第 9b 项含生产 400 回归用例） |
 | `test/test-plan-usage.mjs` | ~250 | **套餐用量快照测试**（29 项断言）：窗口归一化（各平台 key 命名）、百分比（pending 计入/超额不截断）、超额判定（只看月度窗口）、三态计费模式、倒计时、摘要格式化、**真实 API 夹具回归**（代金券 200 倍换算 bug）；运行前需 `npm run compile` |
 | `test/test-transient-retry.mjs` | ~120 | **瞬态错误分类测试**（13 项断言）：500 命中瞬态重试但**不**命中 key 轮换（平台问题不换 key）、429/503 两者都命中（回归）、400/403 都不命中、401/402 仅轮换、失效原因提取；运行前需 `npm run compile` |
