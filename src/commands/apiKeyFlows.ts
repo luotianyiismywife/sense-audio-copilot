@@ -41,38 +41,23 @@ export interface KeyManagerContext {
 /**
  * 查询余额/套餐用量流程（登录 token）。
  *
- * 无 token 时提示输入（F12 → Local Storage → user.state.token）；查询失败
- * （token 失效/网络）时提示重新输入并清空已存 token。
+ * 无 token 时静默返回（不弹输入框——与上游 TokenRhythm 一致，余额显示
+ * 依赖已配置的 token，未配置时管理界面显示"余额未知"）；查询失败
+ * （token 失效/网络）时提示查看输出通道，不弹输入框。
  */
 export async function queryBalanceFlow(ctx: KeyManagerContext): Promise<void> {
-    let token = ctx.getLoginToken();
+    const token = ctx.getLoginToken();
     if (!token) {
-        const input = await vscode.window.showInputBox({
-            title: l10n("Query Balance / Plan Usage"),
-            prompt: l10n("Enter the login PASETO token (F12 → Application → Local Storage → senseaudio.cn → user → state.token, valid 60 days)"),
-            ignoreFocusOut: true,
-            password: true,
-        });
-        if (!input?.trim()) {
-            return;
-        }
-        token = input.trim();
-        await ctx.setLoginToken(token);
+        vscode.window.showWarningMessage(l10n("No login token configured. Balance display is unavailable."));
+        return;
     }
     const info = await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: l10n("Querying balance...") },
-        () => getAccountInfoCached(token!, getBalanceCheckIntervalSec()),
+        () => getAccountInfoCached(token, getBalanceCheckIntervalSec()),
     );
     if (!info) {
-        // 查询失败（token 失效/网络）→ 提示重新输入
-        const retry = await vscode.window.showWarningMessage(
-            l10n("Failed to query balance (token may be expired)"),
-            l10n("Re-enter token"),
-        );
-        if (retry) {
-            await ctx.setLoginToken(undefined);
-            await queryBalanceFlow(ctx);
-        }
+        // 查询失败（token 失效/网络）→ 提示查看输出通道，不弹输入框
+        vscode.window.showWarningMessage(l10n("Failed to query balance (token may be expired)"));
         return;
     }
     // 展示余额（与上游一致：只显示余额，不做套餐重置）

@@ -22,13 +22,9 @@ import { refreshPlanUsageNow } from "../ui/statusBar";
 export async function checkUsageCommand(context: vscode.ExtensionContext): Promise<void> {
     const token = context.globalState.get<string>("senseaudio.loginToken");
     if (!token) {
-        const action = await vscode.window.showWarningMessage(
-            l10n("No login token configured. Set it via the Manage API Keys command first."),
-            l10n("Manage API Keys"),
-        );
-        if (action) {
-            await vscode.commands.executeCommand("senseaudio.manageApiKeys");
-        }
+        // 无 token 时静默返回（不弹输入框/不跳转——与上游 TokenRhythm 一致，
+        // 余额显示依赖已配置的 token，未配置时状态栏显示 "--"）。
+        logger.debug("planUsage.checkUsage.skip", { reason: "no-token" });
         return;
     }
 

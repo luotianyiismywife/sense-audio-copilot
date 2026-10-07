@@ -706,7 +706,7 @@ test/                                     # 测试脚本（运行前需 npm run 
 `{ secrets: vscode.SecretStorage; getLoginToken: () => string | undefined; setLoginToken: (token) => Promise<void> }` — 流程上下文，避免闭包耦合。
 
 #### `queryBalanceFlow(ctx): Promise<void>`
-查询余额/套餐用量流程（登录 token）。无 token 时提示输入（F12 → Local Storage → `user.state.token`）；查询失败（token 失效/网络）时提示重新输入并清空已存 token。
+查询余额/套餐用量流程（登录 token）。**无 token 时静默返回（不弹输入框——与上游 TokenRhythm 一致，余额显示依赖已配置的 token，未配置时管理界面显示"余额未知"）**；查询失败（token 失效/网络）时提示查看输出通道，不弹输入框。
 
 #### `addKeyFlow(ctx): Promise<boolean>`
 添加单个 key 流程（依次输入 key → cookie → label 三元组）。重复值提示已存在并返回 false。
@@ -885,7 +885,7 @@ key 轮换失败原因 → 人类可读标签（l10n key）：`balance`/`invalid
 ### 4.1m `src/commands/checkUsageCommand.ts`
 
 #### `checkUsageCommand(context): Promise<void>`
-套餐用量刷新（`senseaudio.checkUsage`）。强制刷新（`refreshPlanUsageNow()` 绕过 TTL）并弹窗展示三窗口使用率 + 余额。错误区分：未配置 token（提示并跳转 `manageApiKeys`）/ 401 token 失效（提示重新复制）/ 一般失败（提示查看输出通道）。**仅绑定状态栏条目点击**（命令面板隐藏，见 `package.json` 的 `menus.commandPalette`）。
+套餐用量刷新（`senseaudio.checkUsage`）。强制刷新（`refreshPlanUsageNow()` 绕过 TTL）并弹窗展示三窗口使用率 + 余额。错误区分：**无 token 静默返回（不弹输入框/不跳转，状态栏显示 `--`）** / 401 token 失效（提示重新复制）/ 一般失败（提示查看输出通道）。**仅绑定状态栏条目点击**（命令面板隐藏，见 `package.json` 的 `menus.commandPalette`）。
 
 ---
 

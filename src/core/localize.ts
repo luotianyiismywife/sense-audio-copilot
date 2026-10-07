@@ -128,11 +128,9 @@ const zhCN: Record<string, string> = {
 
 	// apiKeyFlows.ts - 登录 token 查询余额/套餐用量（platform.senseaudio.cn/api/user/self）
 	"Query Balance / Plan Usage": "查询余额 / 套餐用量",
-	"Enter the login PASETO token (F12 → Application → Local Storage → senseaudio.cn → user → state.token, valid 60 days)":
-		"输入登录 PASETO token（F12 → Application → Local Storage → senseaudio.cn → user → state.token，60 天有效）",
 	"Querying balance...": "正在查询余额...",
 	"Failed to query balance (token may be expired)": "余额查询失败（token 可能已失效）",
-	"Re-enter token": "重新输入 token",
+	"No login token configured. Balance display is unavailable.": "未配置登录 token，余额显示不可用。",
 	"Voucher balance: ¥{0} ({1} vouchers)": "代金券余额：¥{0}（{1} 张）",
 	"Cash balance: ¥{0}": "现金余额：¥{0}",
 
@@ -153,7 +151,6 @@ const zhCN: Record<string, string> = {
 	"Balance": "余额",
 	"5h window resets in {0}": "五小时窗口将在 {0} 后重置",
 	"Querying plan usage...": "正在查询套餐用量...",
-	"No login token configured. Set it via the Manage API Keys command first.": "未配置登录 token，请先通过「管理 API Keys」命令设置。",
 	"Manage API Keys": "管理 API Keys",
 	"Login token expired. Copy a fresh token from the browser (F12 → Application → Local Storage → senseaudio.cn → user → state.token).":
 		"登录 token 已失效，请从浏览器重新复制（F12 → Application → Local Storage → senseaudio.cn → user → state.token）。",
