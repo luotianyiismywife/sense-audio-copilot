@@ -1,5 +1,5 @@
-SenseAudio models should appear in the Copilot model picker as soon as the extension is active. If an API key is not configured yet, they show a warning icon until you run `SenseAudio: Set SenseAudio API Key`.
+扩展激活后，SenseAudio 模型应立即出现在 Copilot 模型选择器中。如果尚未配置 API 密钥，模型会显示警告图标，直到你运行「SenseAudio: 设置 SenseAudio API 密钥」为止。
 
-If you do not see them right away, the model list may simply be long. Scroll down in the picker and look for models under the **SenseAudio** family, or open the Language Models manager to check:
+如果没有立即看到，可能只是模型列表较长。在选取器中向下滚动，查找 **SenseAudio** 分组下的模型，或打开语言模型管理器查看：
 
-[Open Language Models](command:workbench.action.chat.manage)
+[打开语言模型管理](command:workbench.action.chat.manage)

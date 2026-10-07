@@ -41,16 +41,16 @@
 | **状态栏** | 实时显示当前会话 token 使用量、累计用量、缓存命中率 |
 | **原生 Token 指示器** | 始终启用，向 Copilot Chat 原生 Token 指示器报告 token 用量。通过发送 MIME 类型为 `usage` 的 `LanguageModelDataPart`（TextEncoder 编码 JSON）实现，无需自建状态栏。依赖 VS Code/Copilot Chat 1.116+ 对外部模型 `usage` data part 的识别 |
 | **高级 Token 指示器** | 可通过 `senseaudio.enableThirdPartyTokenIndicator` 配置（**默认关闭**）控制 VS Code 状态栏中的高级Token计数器。关闭后仅显示原生指示器（原生指示器始终上报）。**状态栏可见性由 `isStatusBarEnabled()` 决定 = 高级 Token 指示器 OR 套餐用量显示（`showUsageInStatusBar` / `showUsageInTooltip`）**——不能只用 `enableThirdPartyTokenIndicator` 把关，否则套餐用量功能将永远不可见。状态栏**仅在用户实际使用本插件提供的模型时显示**：启动时隐藏，发起 senseaudio 模型请求时显示，停止使用（空闲 60 秒）后自动隐藏，避免使用其他模型时残留上下文信息 |
-| **套餐用量与余额显示** | 状态栏主文本显示**套餐用量**（对标上游 opencode-go-copilot 的 `Go 5H 65%`）：额度内显示 `$(pulse) 5H 65%`（5 小时限流窗口），额度耗尽显示 `$(pulse) 余额 ¥358.78`；悬停提示展示 5h/周/月三窗口（`5H——0% (0 / 10,000 积分)`）+ 5h 重置倒计时 + 余额 + 计费模式说明。**两套计费规则严格区分**（官方文档 token-plan）：① **周期额度**（5h/周）是**限流窗口**，耗尽后等下一周期自动恢复、**不消耗余额**；② **套餐积分**（月度 `credit_30d_limit`）才是**订阅额度**，耗尽后走超额策略——`enable_extra_usage=true` 则按量计费（代金券→现金），否则**降级 Free 版**。三态 `billingMode`：`plan`/`extra`/`free`。数据源 `GET platform.senseaudio.cn/api/user/self`（Bearer 登录 PASETO token），TTL 缓存 + **失败保留旧快照**（静默降级）。后台轮询（`senseaudio.usageRefreshInterval` 默认 5 分钟）+ 点击状态栏/`senseaudio.checkUsage` 命令强制刷新。配置：`showUsageInStatusBar`（默认开，关闭则主文本改显 Token 计数）、`showUsageInTooltip`（默认开）。**⚠️ 单位陷阱**：代金券积分 `1 元 = 1,000,000 积分`（`POINTS_PER_CNY`，2026-09-27 实测校正，曾误用 5000 导致 200 倍误差），与套餐积分**不是同一单位**。实现见 `src/balance/planUsage.ts`，设计/移植指南见 `docs/plan-usage-design.md` |
+| **套餐用量与余额显示** | 状态栏主文本显示**套餐用量**（对标上游 opencode-go-copilot 的 `Go 5H 65%`）：额度内显示 `$(pulse) 5H 65%`（5 小时限流窗口），额度耗尽显示 `$(pulse) 余额 ¥358.78`；悬停提示展示 5h/周/月三窗口（`5H——0% (0 / 10,000 积分)`）+ 5h 重置倒计时 + 余额 + 计费模式说明。**两套计费规则严格区分**（官方文档 token-plan）：① **周期额度**（5h/周）是**限流窗口**，耗尽后等下一周期自动恢复、**不消耗余额**；② **套餐积分**（月度 `credit_30d_limit`）才是**订阅额度**，耗尽后走超额策略——`enable_extra_usage=true` 则按量计费（代金券→现金），否则**降级 Free 版**。三态 `billingMode`：`plan`/`extra`/`free`。数据源 `GET platform.senseaudio.cn/api/user/self`（Bearer 登录 PASETO token），TTL 缓存 + **失败保留旧快照**（静默降级）。后台轮询（`senseaudio.usageRefreshInterval` 默认 5 分钟）+ 点击状态栏强制刷新。配置：`showUsageInStatusBar`（默认开，关闭则主文本改显 Token 计数）、`showUsageInTooltip`（默认开）。**⚠️ 单位陷阱**：代金券积分 `1 元 = 1,000,000 积分`（`POINTS_PER_CNY`，2026-09-27 实测校正，曾误用 5000 导致 200 倍误差），与套餐积分**不是同一单位**。实现见 `src/balance/planUsage.ts`，设计/移植指南见 `docs/plan-usage-design.md` |
 | **Git 提交消息生成** | 一键生成 Conventional Commit 格式的 Git 提交消息，支持 `auto` 语言模式自动从历史提交检测语言 |
 | **多仓库支持** | 支持多根工作区 (multi-root) 中多个 Git 仓库的提交消息生成 |
-| **模型预设** | 支持通过命令面板快速切换 temperature/top_p 预设（🎯 Precise/⚖️ Balanced/🔥 Creative），也支持手动自定义输入 |
+| **模型预设** | 支持通过 `senseaudio.modelPreset` 设置切换 temperature/top_p 预设（🎯 Precise/⚖️ Balanced/🔥 Creative），也支持手动自定义输入 |
 | **国际化** | 内置简体中文 (zh-cn) 中英文双语界面 |
 | **重试机制** | **两层重试，职责分离**：① **HTTP 层**（`executeWithRetry`，`senseaudio.retry.*`）——同一请求退避重试，默认 2 次，仅覆盖**网关错误**（502/504）与网络错误；② **整轮层**（`tryTransientRetryRound`，`senseaudio.transientRetry*`）——重跑整个 key 轮换循环，默认 3 次，覆盖平台错误（429/500/503）。**两层刻意不重叠**：429/500/503 只走整轮层（可换 key 或重试同一 key），避免 `maxAttempts × (transientRetryTimes+1)` 次尝试导致长时间挂起 |
 | **请求延迟** | 可配置的请求间隔延迟，避免触发 API 限流 |
 | **超时控制** | 可配置的请求超时时间（默认 10 分钟） |
 | **立即取消** | 取消请求时通过 `reader.cancel()` 立即中断流式读取，停止后台接收 |
-| **视觉代理配置** | 支持通过设置 `senseaudio.visionProxyModel`（默认 `qwen3.6-35b-a3b`）、`senseaudio.visionProxyThinking` 配置图片代理所使用的视觉模型和思考模式。`senseaudio.visionProxyThinking` 默认关闭，关闭时内部请求通过 `modelOptions.thinking={ type: "disabled" }` / `reasoning_effort="none"` 禁用视觉模型思考，最终 OpenAI 兼容请求体发送 `thinking: { type: "disabled" }`。**视觉模型仅从本供应商（senseaudio）查找**（`findVisionModel` 多级回退匹配裸 ID/完整 ID，修复 issue #3——`selectChatModels` 裸 ID 精确匹配带 vendor 前缀的完整 identifier 会落空）。**视觉代理模型动态选择**：`senseaudio.setVisionProxyModel` 命令从 `/v1/models` 动态加载视觉模型列表（**视觉能力经 models.dev 判定**，见 `models/visionModels.ts`——`/v1/models` 不返回 `supports_vision`），QuickPick 选择代替手填；API 不可用时回退手填 |
+| **视觉代理配置** | 支持通过设置 `senseaudio.visionProxyModel`（默认 `qwen3.6-35b-a3b`）、`senseaudio.visionProxyThinking` 配置图片代理所使用的视觉模型和思考模式。`senseaudio.visionProxyThinking` 默认关闭，关闭时内部请求通过 `modelOptions.thinking={ type: "disabled" }` / `reasoning_effort="none"` 禁用视觉模型思考，最终 OpenAI 兼容请求体发送 `thinking: { type: "disabled" }`。**视觉模型仅从本供应商（senseaudio）查找**（`findVisionModel` 多级回退匹配裸 ID/完整 ID，修复 issue #3——`selectChatModels` 裸 ID 精确匹配带 vendor 前缀的完整 identifier 会落空）。视觉模型 ID 直接通过 `senseaudio.visionProxyModel` 设置填写（如 `qwen3.6-35b-a3b`、`qwen3.8-27b`、`deepseek-v4.1-flash`、`glm-5.3-flash`） |
 | **安装欢迎页 (Walkthrough)** | 引导向导（3 个步骤：设置 API Key、显示模型、高级设置），**仅可手动打开**（命令面板 → Welcome: Open Walkthrough）。**不再自动弹出**（2026-09-18 移除首次安装自动打开逻辑——未配置 key 时启动/请求均静默，不弹任何引导界面） |
 
 ### 1.3 模型清单
@@ -146,18 +146,14 @@ activate(context)
   ├── vscode.lm.registerLanguageModelChatProvider("senseaudio", provider)
   ├── registerCommands(context, provider)    ← 委托 src/commands/registerCommands.ts
   │   ├── onDidChangeConfiguration 监听       ← apiMode / enableAutoModelDiscovery 变化时刷新模型列表
-  │   └── 注册 12 条命令:
-  │       ├── senseaudio.setApiKey                ← 设置 API Key
-  │       ├── senseaudio.manageApiKeys            ← 多 Key 管理 QuickPick
-  │       ├── senseaudio.setVisionProxyModel      ← 选择视觉代理模型
-  │       ├── senseaudio.getApiKey                ← 打开 SenseAudio 官网获取 Key
+  │   └── 注册 7 条命令:
+  │       ├── senseaudio.manageApiKeys            ← 多 Key 管理 QuickPick（也是 provider 齿轮入口）
   │       ├── senseaudio.openSettings             ← 打开扩展设置页
   │       ├── senseaudio.generateGitCommitMessage ← 生成提交消息
   │       ├── senseaudio.abortGitCommitMessage    ← 中止生成
-  │       ├── senseaudio.setModelPreset           ← 设置模型预设
   │       ├── senseaudio.syncPush                 ← 推送 key/cookie/备注 到云端 Gist
   │       ├── senseaudio.syncPull                 ← 从云端 Gist 拉取 key/cookie/备注
-  │       └── senseaudio.checkUsage               ← 查询套餐用量与余额（也绑定状态栏点击）
+  │       └── senseaudio.checkUsage               ← 刷新套餐用量（仅绑定状态栏点击，命令面板隐藏）
   ├── syncModelsOnStartup(context)           ← 启动模型同步（每日最多一次，结果以一行日志输出）
   ├── autoPullOnStartup(context)             ← 启动云同步自动拉取（静默，云端更新时覆盖本地）
   └── 注册 dispose 清理
@@ -499,9 +495,7 @@ src/
 │   ├── apiKeyManagerUi.ts                # manageApiKeys 主入口（渲染菜单 + 分发动作）
 │   ├── apiKeyDisplay.ts                  # key 展示辅助（余额格式化 / 详情行 / QuickPick 项，三界面共用）
 │   ├── apiKeyFlows.ts                    # key 管理交互流程（增删改/导入/检测/cookie）
-│   ├── checkUsageCommand.ts              # 套餐用量查询命令（senseaudio.checkUsage）
-│   ├── visionProxyCommand.ts             # 视觉代理模型选择
-│   └── modelPresetCommand.ts             # 模型温度预设选择
+│   ├── checkUsageCommand.ts              # 套餐用量刷新（senseaudio.checkUsage，仅状态栏点击）
 ├── core/                                 # 基础设施
 │   ├── logger.ts                         # 日志系统
 │   ├── localize.ts                       # 国际化/本地化
@@ -531,13 +525,10 @@ src/
     └── vscode.proposed.languageModelThinkingPart.d.ts
 
 resources/
-└── walkthrough/                          # 安装欢迎页 (Walkthrough) 文档
+└── walkthrough/                          # 安装欢迎页 (Walkthrough) 文档（仅中文版）
     ├── set-api-key.md                    # 步骤 1：设置 API Key
-    ├── set-api-key.nls.zh-cn.md          # 步骤 1 中文版
     ├── show-models.md                    # 步骤 2：显示模型
-    ├── show-models.nls.zh-cn.md          # 步骤 2 中文版
-    ├── advanced-settings.md              # 步骤 3：高级设置
-    └── advanced-settings.nls.zh-cn.md    # 步骤 3 中文版
+    └── advanced-settings.md              # 步骤 3：高级设置
 
 scripts/
 ├── build/                                # 构建相关
@@ -622,16 +613,14 @@ test/                                     # 测试脚本（运行前需 npm run 
 | `models/models.ts` | ~265 | 9 个内置模型定义（2026-09-29 按实测重写），模型配置查询（所有模型声明 `imageInput: true`） |
 | `models/modelsDev.ts` | ~161 | models.dev 元数据拉取与查询：从 `models.dev/models.json` 下载并索引模型规格，支持短 ID 匹配，1 小时缓存 |
 | `models/apiModelList.ts` | ~190 | API 模型列表获取：从 `/v1/models` 拉取可用模型 ID 及能力标记（`supports_responses` / `supports_anthropic` 由 `protocols` 推导），5 分钟缓存，静默降级 |
-| `models/visionModels.ts` | ~90 | **视觉能力判定**（2026-09-29 新增）：`resolveVisionCapability()`（API 标记 → models.dev `attachment`/`modalities` → 硬编码兜底）、`getVisionSupportedModelIds()`（供视觉代理命令） |
+| `models/visionModels.ts` | ~60 | **视觉能力判定**（2026-09-29 新增）：`resolveVisionCapability()`（API 标记 → models.dev `attachment`/`modalities` → 硬编码兜底） |
 | `models/modelSync.ts` | ~83 | 启动模型同步：每日最多一次检查 API 新模型（`globalState` 记录日期），同步结果以一行日志输出到「SenseAudio」Output 通道（`models.sync` 标签），**不写文件**（v1.7.0 移除工作区 `.copilot/model-sync-log.md`，见 issue #1），无 Key/API 不可用记录失败且不标记已同步 |
 | `models/provideModel.ts` | ~280 | 模型信息提供函数（含自动发现）：**先读 `enableAutoModelDiscovery` 开关**（关闭则直接用内置列表）、过滤内置模型、从 API 和 models.dev 自动发现新增模型、按 apiMode 过滤 |
-| `commands/registerCommands.ts` | ~130 | 注册全部 12 条命令（setApiKey / manageApiKeys / setVisionProxyModel / getApiKey / openSettings / generateGitCommitMessage / abortGitCommitMessage / setModelPreset / syncPush / syncPull / checkUsage）+ `onDidChangeConfiguration` 监听（apiMode / enableAutoModelDiscovery 变化时刷新模型列表） |
+| `commands/registerCommands.ts` | ~90 | 注册全部 7 条命令（manageApiKeys / openSettings / generateGitCommitMessage / abortGitCommitMessage / syncPush / syncPull / checkUsage）+ `onDidChangeConfiguration` 监听（apiMode / enableAutoModelDiscovery 变化时刷新模型列表） |
 | `commands/apiKeyManagerUi.ts` | ~171 | `showApiKeyManager()` 主入口：**仅渲染主菜单 + 分发动作**（增删/批量导入/设为当前（仅 single 模式）/绑定 cookie/重置失效/检测可用性/编辑 key）；具体流程委托 `apiKeyFlows.ts`，展示委托 `apiKeyDisplay.ts` |
 | `commands/apiKeyDisplay.ts` | ~138 | **key 展示辅助**（2026-09-28 新增，纯函数）：`formatBalanceDetailText`（余额格式化）、`fetchAccountInfo`（TTL 缓存查询）、`buildKeyDetailLine`（单 key 详情行）、`buildKeyQuickPickItems`（key 列表 QuickPick 项）。主界面 / key 选择界面 / 检测二级界面共用，展示逻辑只写一处 |
 | `commands/apiKeyFlows.ts` | ~470 | **key 管理交互流程**（2026-09-28 新增）：`KeyManagerContext` 接口 + `queryBalanceFlow` / `addKeyFlow` / `parseBatchImport` / `batchImportFlow`（`key---cookie---备注;` 单行格式）/ `deleteKeysFlow`（多选 + 循环 + 返回）/ `pickKey` / `checkAvailabilityFlow` / `checkAllAvailabilityFlow` / `showCheckMenu` / `bindCookieFlow` / `editKeyFlow` |
-| `commands/checkUsageCommand.ts` | ~60 | `checkUsageCommand()`：强制刷新套餐用量（绕过 TTL）并弹窗展示三窗口使用率 + 余额；区分未配置 token / 401 失效 / 一般失败三种错误 |
-| `commands/visionProxyCommand.ts` | ~80 | `setVisionProxyModelCommand()`：从 `/v1/models` 动态加载视觉模型列表（视觉能力经 `models/visionModels.ts` 判定）供 QuickPick 选择，desc 作 tooltip；无视觉模型时提示检查 Key/网络；API 不可用时回退手填 |
-| `commands/modelPresetCommand.ts` | ~108 | `setModelPresetCommand()`：命名预设（Precise/Balanced/Creative）与自定义 temperature/top_p 输入 |
+| `commands/checkUsageCommand.ts` | ~60 | `checkUsageCommand()`：强制刷新套餐用量（绕过 TTL）并弹窗展示三窗口使用率 + 余额；区分未配置 token / 401 失效 / 一般失败三种错误。仅绑定状态栏点击（命令面板隐藏） |
 | `core/logger.ts` | ~43 | 日志输出 (LogOutputChannel) |
 | `core/localize.ts` | ~213 | 中英文国际化 |
 | `core/types.ts` | ~94 | `SenseAudioModelItem`, `ModelPreset`, `ModelsResponse`, `RetryConfig` 等类型 |
@@ -684,7 +673,7 @@ test/                                     # 测试脚本（运行前需 npm run 
 ### 4.1a `src/commands/registerCommands.ts`
 
 #### `registerCommands(context, provider): void`
-注册扩展的全部命令与配置变更监听，所有 disposable 推入 `context.subscriptions`。含 `onDidChangeConfiguration` 监听（`senseaudio.apiMode` / `senseaudio.enableAutoModelDiscovery` 变化时调用 `provider.notifyModelListChanged()`）与 11 条命令：`setApiKey`（旧版单 key 流程，写入多 key store）、`manageApiKeys`（委托 `showApiKeyManager`）、`setVisionProxyModel`（委托 `setVisionProxyModelCommand`）、`getApiKey`（打开官网）、`openSettings`、`generateGitCommitMessage` / `abortGitCommitMessage`、`setModelPreset`（委托 `setModelPresetCommand`）、`syncPush` / `syncPull`（委托 `pushToCloud` / `pullFromCloud`）。
+注册扩展的全部命令与配置变更监听，所有 disposable 推入 `context.subscriptions`。含 `onDidChangeConfiguration` 监听（`senseaudio.apiMode` / `senseaudio.enableAutoModelDiscovery` 变化时调用 `provider.notifyModelListChanged()`）与 7 条命令：`manageApiKeys`（委托 `showApiKeyManager`，也是 provider 的 `managementCommand` 齿轮入口）、`openSettings`、`generateGitCommitMessage` / `abortGitCommitMessage`、`syncPush` / `syncPull`（委托 `pushToCloud` / `pullFromCloud`）、`checkUsage`（仅状态栏点击，命令面板隐藏）。
 
 ---
 
@@ -748,20 +737,6 @@ test/                                     # 测试脚本（运行前需 npm run 
 
 #### `editKeyFlow(ctx, index): Promise<void>`
 编辑 key 流程（value / cookie / label 三字段，value 冲突校验）。
-
----
-
-### 4.1c `src/commands/visionProxyCommand.ts`
-
-#### `setVisionProxyModelCommand(context): Promise<void>`
-视觉代理模型选择命令（`senseaudio.setVisionProxyModel`）。从 `/v1/models` 动态加载视觉模型列表（视觉能力经 `models/visionModels.ts` 的 `getVisionSupportedModelIds` 判定——`/v1/models` 不返回 `supports_vision`）供 QuickPick 选择，`desc` 作 tooltip；无视觉模型时显示 `$(warning) 未检测到支持视觉的模型` 提示检查 Key/网络；API 不可用时回退手填。
-
----
-
-### 4.1d `src/commands/modelPresetCommand.ts`
-
-#### `setModelPresetCommand(): Promise<void>`
-模型温度预设选择命令（`senseaudio.setModelPreset`）。提供命名预设（Precise/Balanced/Creative 等）与自定义输入（单个数字 = temperature，两个逗号分隔数字 = temperature + top_p）。
 
 ---
 
@@ -910,7 +885,7 @@ key 轮换失败原因 → 人类可读标签（l10n key）：`balance`/`invalid
 ### 4.1m `src/commands/checkUsageCommand.ts`
 
 #### `checkUsageCommand(context): Promise<void>`
-套餐用量查询命令（`senseaudio.checkUsage`）。强制刷新（`refreshPlanUsageNow()` 绕过 TTL）并弹窗展示三窗口使用率 + 余额。错误区分：未配置 token（提示并跳转 `manageApiKeys`）/ 401 token 失效（提示重新复制）/ 一般失败（提示查看输出通道）。同时绑定到状态栏条目点击。
+套餐用量刷新（`senseaudio.checkUsage`）。强制刷新（`refreshPlanUsageNow()` 绕过 TTL）并弹窗展示三窗口使用率 + 余额。错误区分：未配置 token（提示并跳转 `manageApiKeys`）/ 401 token 失效（提示重新复制）/ 一般失败（提示查看输出通道）。**仅绑定状态栏条目点击**（命令面板隐藏，见 `package.json` 的 `menus.commandPalette`）。
 
 ---
 
@@ -1168,9 +1143,6 @@ API 实现的抽象基类。
 1. `/v1/models` 的 `supports_vision`（平台当前不返回，但若将来返回则自动生效）
 2. models.dev：`attachment === true` 或 `modalities.input` 含 `"image"`；`attachment === false` 则判否
 3. 硬编码兜底 `HARDCODED_VISION`（SenseAudio 自研模型，两处目录均未收录）——默认 `false`（纯文本），未知模型走 ask_image 代理而非直接发图失败
-
-#### `getVisionSupportedModelIds(apiKey): Promise<Set<string>>`
-返回视觉模型 ID 集，供 `senseaudio.setVisionProxyModel` 命令的 QuickPick 使用。组合缓存的 `/v1/models` 列表与 models.dev 元数据，反映平台**当前**模型集（非硬编码列表）。`/v1/models` 为空时返回空集。
 
 > **实测判定结果（2026-09-29）**：视觉 ✅ = `qwen3.8-27b`、`qwen3.6-35b-a3b`、`deepseek-v4.1-flash`、`glm-5.3-flash`；纯文本 ❌ = `senseaudio-s2` / `-flash` / `-lite`、`sensenova-6.8-flash-lite`、`deepseek-v4-flash-0731`。models.dev 与 OpenRouter `architecture.input_modalities` 对全部 5 个收录模型判定一致。
 

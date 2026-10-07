@@ -1,12 +1,12 @@
-## Advanced Settings
+## 高级设置
 
-Customize your SenseAudio experience through the extension settings:
+通过扩展设置自定义你的 SenseAudio 体验：
 
-- **Model Presets**: Quickly switch between Precise, Balanced, Creative, or custom temperature/top_p values via the command palette.
-- **Auto Model Discovery**: The model picker is automatically filtered to models available on your SenseAudio account.
-- **Multiple API Keys**: Manage multiple keys (add/delete/set current/bind cookie/check availability) via the command palette. Keys can rotate automatically when one runs out of balance.
-- **Vision Proxy**: Configure which vision model is used to describe images for non-vision models.
-- **Git Commit**: Customize commit message language, prompt, and style reference settings.
-- **Token Indicator**: Control the advanced token counter in the status bar.
+- **模型预设**：通过「senseaudio.modelPreset」设置在精确、均衡、创意或自定义温度/top_p 之间切换。
+- **自动模型发现**：模型选择器会自动过滤为你 SenseAudio 账号下可用的模型。
+- **多 API Key**：通过命令面板管理多个 Key（添加/删除/设为当前/绑定 cookie/检测可用性）。某个 Key 余额不足时可自动轮换到其他 Key。
+- **视觉代理**：配置用于为非视觉模型描述图片的视觉模型。
+- **Git 提交**：自定义提交消息语言、提示词和风格参考设置。
+- **Token 指示器**：控制状态栏中的高级 Token 计数器。
 
-[Manage API Keys](command:senseaudio.manageApiKeys) · [Open Settings](command:senseaudio.openSettings)
+[管理 API Keys](command:senseaudio.manageApiKeys) · [打开设置](command:senseaudio.openSettings)

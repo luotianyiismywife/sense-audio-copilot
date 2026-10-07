@@ -18,7 +18,7 @@ Integrate [SenseAudio](https://senseaudio.cn) models into GitHub Copilot Chat as
 
 ### Usage
 
-1. **Set API Key**: `Ctrl+Shift+P` → `SenseAudio: Set SenseAudio API Key`
+1. **Set API Key**: `Ctrl+Shift+P` → `SenseAudio: Manage API Keys`
 2. **Show Models**: Click the settings icon in the model picker → **Language Models** panel → set your desired models to Visible
 3. **Select Model**: In the Copilot Chat bottom model picker, choose a "SenseAudio" model
 4. **Start chatting**
@@ -33,7 +33,7 @@ Once installed, the status bar shows your **SenseAudio plan usage** for the curr
 
 When the monthly plan quota is exhausted, the main text switches to the balance (e.g. `余额 ¥358.78`) so you can tell at a glance that you are now being billed from your balance.
 
-Click the status bar item or run `SenseAudio: Check Plan Usage & Balance` to refresh immediately.
+Click the status bar item to refresh immediately.
 
 > [!IMPORTANT]
 > **Two separate billing rules** (see the [official docs](https://docs.senseaudio.cn/guides/account/token-plan)):
@@ -55,7 +55,7 @@ You can configure the model, language, number of recent commits to reference, an
 
 ### Model Temperature Presets
 
-Quickly switch temperature presets via `Ctrl+Shift+P` → `SenseAudio: Set Model Temperature Preset`.
+Switch temperature presets via the `senseaudio.modelPreset` setting (or set `senseaudio.temperature` / `senseaudio.top_p` directly with `senseaudio.modelPreset` set to `"custom"`).
 
 Built-in presets:
 
@@ -72,7 +72,7 @@ You can also configure `senseaudio.temperature` and `senseaudio.top_p` directly 
 
 This extension adds **extended vision understanding** capability to **text-only models** that do not natively support vision. When you send a message with an image to these models, they can call a vision-capable model to describe the image, and then answer based on that description.
 
-You can configure the default vision model and whether to enable thinking when describing images. By default, `qwen3.6-35b-a3b` is used to describe images. You can also pick a vision model from a dynamic list via the **`SenseAudio: Select Vision Proxy Model`** command instead of typing the ID by hand — the list is built from the live `/v1/models` response, with vision capability resolved through [models.dev](https://models.dev) (the platform's `/v1/models` does not return a `supports_vision` flag). Falls back to manual input when the API is unavailable.
+You can configure the default vision model and whether to enable thinking when describing images. By default, `qwen3.6-35b-a3b` is used to describe images. Set `senseaudio.visionProxyModel` to any vision-capable model ID (e.g. `qwen3.6-35b-a3b`, `qwen3.8-27b`, `deepseek-v4.1-flash`, `glm-5.3-flash`).
 
 > **Scope note — how images reach the vision proxy**: the `ask_image` proxy applies to images **you paste/attach manually into the chat** (the extension declares `imageInput: true` so VS Code forwards image data to it, and non-vision models delegate to the vision proxy model). It does **not** apply to screenshots taken by VS Code's **built-in screenshot tool** (e.g. in agent mode) — screenshot analysis is handled internally by the Copilot Chat framework using GitHub Copilot's own vision models, which is outside a third-party provider's control. If your Copilot plan's vision model is unavailable, the built-in screenshot tool reports "vision model query unavailable"; this does **not** affect manual image pasting, which still works through the extension's proxy.
 
@@ -186,7 +186,7 @@ AGPL-3.0 License. This project builds upon the architecture of [opencode-go-copi
 
 ### 使用
 
-1. **设置 API Key**：`Ctrl+Shift+P` → `SenseAudio: Set SenseAudio API Key`
+1. **设置 API Key**：`Ctrl+Shift+P` → `SenseAudio: 管理 API Keys`
 2. **显示模型**：在模型选择器中点击设置图标 → **语言模型** 面板 → 将需要使用的模型显示
 3. **选择模型**：在 Copilot Chat 底部模型选择器中选择 "SenseAudio" 下的模型
 4. **开始对话**
@@ -201,7 +201,7 @@ AGPL-3.0 License. This project builds upon the architecture of [opencode-go-copi
 
 当**月度套餐额度**耗尽时，主文本会切换为余额（如 `余额 ¥358.78`），一眼即可看出已开始从余额扣费。
 
-点击状态栏条目或运行 `SenseAudio: 查询套餐用量与余额` 可立即刷新。
+点击状态栏条目可立即刷新。
 
 > [!IMPORTANT]
 > **两套计费规则相互独立**（详见[官方文档](https://docs.senseaudio.cn/guides/account/token-plan)）：
@@ -225,7 +225,7 @@ AGPL-3.0 License. This project builds upon the architecture of [opencode-go-copi
 
 本插件为**不支持视觉理解**的**纯文本模型**添加了**扩展视觉理解**功能，当你向这些模型发送带有图片的信息时，他们可以调用支持视觉理解的模型为图片输出描述，然后再回答。
 
-通过配置文件可更改默认使用的模型以及是否在描述图片时启用思考。默认情况下，将使用 `qwen3.6-35b-a3b` 描述图片。也可以通过 **`SenseAudio: 选择视觉代理模型`** 命令从动态列表中挑选视觉模型，无需手填模型 ID——列表来自实时 `/v1/models` 响应，视觉能力经 [models.dev](https://models.dev) 判定（平台的 `/v1/models` 不返回 `supports_vision` 标记）；API 不可用时回退为手动输入。
+通过配置文件可更改默认使用的模型以及是否在描述图片时启用思考。默认情况下，将使用 `qwen3.6-35b-a3b` 描述图片。将 `senseaudio.visionProxyModel` 设为任意支持视觉的模型 ID（如 `qwen3.6-35b-a3b`、`qwen3.8-27b`、`deepseek-v4.1-flash`、`glm-5.3-flash`）即可。
 
 > **适用范围说明 —— 图片如何到达视觉代理**：`ask_image` 代理作用于**你在聊天中手动粘贴/附带**的图片（扩展声明 `imageInput: true`，VS Code 会将图片数据传给扩展，非视觉模型再委托给视觉代理模型）。它**不覆盖** VS Code **内置截图工具**拍摄的截图（如 agent 模式下的截图）——截图分析由 Copilot Chat 框架内部使用 GitHub Copilot 自带的视觉模型完成，第三方提供商无法接管。如果你的 Copilot 套餐的视觉模型不可用，内置截图工具会提示"视觉模型查询暂不可用"；这**不影响**手动粘贴图片，后者仍会通过扩展的代理正常工作。
 
@@ -256,7 +256,7 @@ AGPL-3.0 License. This project builds upon the architecture of [opencode-go-copi
 
 ### 调整模型温度
 
-通过 `Ctrl+Shift+P` → `SenseAudio: Set Model Temperature Preset` 快速切换温度预设。
+通过 `senseaudio.modelPreset` 设置切换温度预设（也可将 `senseaudio.modelPreset` 设为 `"custom"` 后直接配置 `senseaudio.temperature` / `senseaudio.top_p`）。
 
 内置 4 个预设档位：
 

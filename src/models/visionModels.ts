@@ -18,8 +18,8 @@
  *      both catalogs. Defaults to `false` (text-only) so an unknown model goes
  *      through the ask_image proxy instead of failing on a real image request.
  */
-import { getApiModelMetadataList, type ApiModelMetadata } from "./apiModelList";
-import { ensureModelsDevLoaded, lookupModelDevEntry, type ModelsDevEntry } from "./modelsDev";
+import type { ApiModelMetadata } from "./apiModelList";
+import type { ModelsDevEntry } from "./modelsDev";
 
 /**
  * Hardcoded vision capability for models absent from models.dev / OpenRouter.
@@ -67,31 +67,4 @@ export function resolveVisionCapability(
     }
     // 3. Hardcoded fallback (SenseAudio's own models).
     return HARDCODED_VISION[modelId] ?? false;
-}
-
-/**
- * Get the set of model IDs that accept image input, for the vision-proxy picker.
- *
- * Combines the cached `/v1/models` list with models.dev metadata so the result
- * reflects the platform's current model set (not a hardcoded list).
- *
- * @param apiKey API key used to fetch `/v1/models`.
- * @returns Set of vision-capable model IDs (empty on total failure).
- */
-export async function getVisionSupportedModelIds(apiKey: string | undefined): Promise<Set<string>> {
-    const apiModels = await getApiModelMetadataList(apiKey);
-    if (apiModels.length === 0) {
-        return new Set();
-    }
-    // Warm the models.dev catalog (1h cache, silent degradation).
-    await ensureModelsDevLoaded();
-
-    const result = new Set<string>();
-    for (const meta of apiModels) {
-        const devEntry = lookupModelDevEntry(meta.id);
-        if (resolveVisionCapability(meta.id, meta, devEntry)) {
-            result.add(meta.id);
-        }
-    }
-    return result;
 }

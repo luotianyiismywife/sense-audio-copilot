@@ -40,20 +40,10 @@
 			{
 				"vendor": "senseaudio",
 				"displayName": "%providerDisplayName%",
-				"managementCommand": "senseaudio.setApiKey"
+				"managementCommand": "senseaudio.manageApiKeys"
 			}
 		],
 		"commands": [
-			{
-				"command": "senseaudio.setApiKey",
-				"category": "%commandCategory%",
-				"title": "%command.setApiKey%"
-			},
-			{
-				"command": "senseaudio.getApiKey",
-				"category": "%commandCategory%",
-				"title": "%command.getApiKey%"
-			},
 			{
 				"command": "senseaudio.openSettings",
 				"category": "%commandCategory%",
@@ -72,19 +62,9 @@
 				"icon": "$(debug-stop)"
 			},
 			{
-				"command": "senseaudio.setModelPreset",
-				"category": "%commandCategory%",
-				"title": "%command.setModelPreset%"
-			},
-			{
 				"command": "senseaudio.manageApiKeys",
 				"category": "%commandCategory%",
 				"title": "%command.manageApiKeys%"
-			},
-			{
-				"command": "senseaudio.setVisionProxyModel",
-				"category": "%commandCategory%",
-				"title": "%command.setVisionProxyModel%"
 			},
 			{
 				"command": "senseaudio.syncPush",
@@ -116,7 +96,7 @@
 							"markdown": "resources/walkthrough/set-api-key.md"
 						},
 						"completionEvents": [
-							"onCommand:senseaudio.setApiKey"
+							"onCommand:senseaudio.manageApiKeys"
 						]
 					},
 					{
@@ -159,6 +139,10 @@
 				{
 					"command": "senseaudio.abortGitCommitMessage",
 					"when": "config.git.enabled && senseaudio.isGeneratingCommit"
+				},
+				{
+					"command": "senseaudio.checkUsage",
+					"when": "false"
 				}
 			]
 		},

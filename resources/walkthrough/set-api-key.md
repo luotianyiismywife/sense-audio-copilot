@@ -1,10 +1,10 @@
-SenseAudio for Copilot Chat uses your own SenseAudio API key to make a variety of AI models available in the model picker.
+SenseAudio for Copilot Chat 使用你自己的 SenseAudio API 密钥，让丰富的 AI 模型出现在 Copilot 模型选择器中。
 
-Paste it once, then update or remove it later from the Command Palette.
+只需粘贴一次，之后可通过命令面板更新或移除。
 
-- `Cmd/Ctrl + Shift + P`: Open the Command Palette
-- `SenseAudio: Set SenseAudio API Key`: Set or update your API key
-- `SenseAudio: Generate Commit Message with SenseAudio`: Generate Git commit messages
+- `Cmd/Ctrl + Shift + P`：打开命令面板
+- `SenseAudio: 管理 API Keys`：设置或更新 API 密钥
+- `SenseAudio: 使用 SenseAudio 生成提交消息`：生成 Git 提交消息
 
-[Get an API Key](https://senseaudio.cn)
-[Set API Key](command:senseaudio.setApiKey)
+[获取 API 密钥](https://senseaudio.cn)
+[管理 API Keys](command:senseaudio.manageApiKeys)

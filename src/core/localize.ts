@@ -4,11 +4,7 @@ const zhCN: Record<string, string> = {
 	// statusBar
 	"Token Count": "Token 计数",
 	// extension.ts - API key prompts
-	"SenseAudio Provider API Key": "SenseAudio 提供商 API 密钥",
-	"Update your SenseAudio API key": "更新您的 SenseAudio API 密钥",
 	"Enter your SenseAudio API key": "输入您的 SenseAudio API 密钥",
-	"SenseAudio API key cleared.": "SenseAudio API 密钥已清除。",
-	"SenseAudio API key saved.": "SenseAudio API 密钥已保存。",
 
 	// provider.ts
 	"SenseAudio API key not found": "未找到 SenseAudio API 密钥",
@@ -58,26 +54,6 @@ const zhCN: Record<string, string> = {
 	// vision proxy
 	"Querying vision model: \"{0}\"": "正在根据图片提问：{0}",
 	"The image you sent was flagged as sensitive by the content moderation system. Please try a different image.": "您发送的图片被内容审核系统判定为敏感，请尝试更换图片。",
-
-	// extension.ts - model preset (setModelPreset command)
-	"Custom (manual input)": "自定义 (手动输入)",
-	" (current)": " (当前)",
-	"(current, temperature: {0}, top_p: {1})": "(当前, 温度: {0}, top_p: {1})",
-	"Set Model Preset": "设置模型预设",
-	"Select a preset": "选择一个档位",
-	"Enter custom temperature": "输入自定义温度",
-	"Enter a single number for temperature only (<=2), or two comma-separated numbers for temperature and top_p (temp<=2, top_p<=1), e.g.: 0.7 or 0.7,0.95": "输入一个数字只设温度 (<=2), 输入两个数字用英文逗号分隔同时设温度和 top_p (温度<=2, top_p<=1), 如: 0.7 或 0.7,0.95",
-	"Please enter at least temperature value": "请至少输入一个温度值",
-	"Please enter at most two numbers separated by a comma": "最多输入两个数值, 用英文逗号分隔",
-	"Temperature must be between 0.0 and 2.0": "温度必须在 0.0 到 2.0 之间",
-	"top_p must be between 0.0 and 1.0": "top_p 必须在 0.0 到 1.0 之间",
-	"Precise": "精确",
-	"Balanced": "均衡",
-	"Creative": "创意",
-	"Extra Creative": "极具创意",
-	"Set to temperature: {0} ({1})": "已设为温度 {0} ({1})",
-	"Set to temperature: {0} (custom)": "已设为温度 {0} (自定义)",
-	"Set to temp: {0}, top_p: {1} (custom)": "已设为温度 {0}, top_p {1} (自定义)",
 
 	// keyManager.ts - API Key management
 	"Available": "可用",
@@ -133,11 +109,6 @@ const zhCN: Record<string, string> = {
 	"Enter the tr_session cookie value for this key": "输入该 key 对应的 tr_session cookie 值（留空清除）",
 	"Cookie updated": "Cookie 已更新",
 	"Cookie cleared": "Cookie 已清除",
-	"Select Vision Proxy Model": "选择视觉代理模型",
-	"Enter the vision model ID": "输入视觉模型 ID",
-	"Vision proxy model set to {0}": "视觉代理模型已设置为 {0}",
-	"No vision-capable model detected": "未检测到支持视觉的模型",
-	"Check your API key / network, or enter a model ID manually": "请检查 API Key / 网络，或手动输入模型 ID",
 	"Checking availability...": "正在检测可用性...",
 	"Key is available": "检测通过：Key 可用",
 	"Key balance is insufficient (≤ {0} CNY)": "余额不足（≤ {0} 元），Key 标记为不可用",
@@ -173,7 +144,6 @@ const zhCN: Record<string, string> = {
 	"No cloud sync Gist found. Use push first.": "未找到云端同步 Gist，请先执行推送",
 	"Cloud sync data is empty or corrupted": "云端同步数据为空或已损坏",
 	"Pulled {0} keys from cloud Gist": "已从云端 Gist 拉取 {0} 个 Key",
-	"Cloud sync: pulled {0} keys from Gist on startup": "云同步：启动时已从 Gist 拉取 {0} 个 Key",
 	"Failed to pull from cloud: {0}": "从云端拉取失败：{0}",
 	"Cloud sync is already in progress": "云同步正在进行中，请稍后再试",
 
