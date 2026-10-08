@@ -126,14 +126,6 @@ const zhCN: Record<string, string> = {
 		"当前 API Key 不可用（{0}）。single 模式仅在余额不足（402）时才自动切换 key；请稍后重试，或使用「管理 API Keys」命令检测/切换。",
 	"No API keys configured": "未配置 API Key",
 
-	// apiKeyFlows.ts - 平台登录凭据查询余额/套餐用量（platform.senseaudio.cn/api/user/self）
-	"Query Balance / Plan Usage": "查询余额 / 套餐用量",
-	"Querying balance...": "正在查询余额...",
-	"Failed to query balance (token may be expired)": "余额查询失败（凭据可能已失效）",
-	"No platform login credential bound. Bind one via Bind/Update Credential.": "未绑定平台登录凭据，请通过「绑定/更新平台登录凭据」绑定。",
-	"Voucher balance: ¥{0} ({1} vouchers)": "代金券余额：¥{0}（{1} 张）",
-	"Cash balance: ¥{0}": "现金余额：¥{0}",
-
 	// cloudSync.ts - 云同步（GitHub Gist）
 	"Pushing keys to cloud...": "正在推送 Keys 到云端...",
 	"Pushed {0} keys to cloud Gist": "已推送 {0} 个 Key 到云端 Gist",

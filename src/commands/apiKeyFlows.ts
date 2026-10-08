@@ -12,7 +12,6 @@ import {
     getApiKeyStore,
     maskApiKey,
     maskCredential,
-    pickAccountCredential,
     removeApiKey,
     setKeyCredential,
     updateApiKey,
@@ -21,9 +20,7 @@ import {
 } from "../keys/keyManager";
 import {
     testKeyAvailability,
-    getBalanceCheckIntervalSec,
     getMinBalanceCny,
-    getAccountInfoCached,
 } from "../balance/balanceCheck";
 import { buildKeyQuickPickItems } from "./apiKeyDisplay";
 
@@ -35,36 +32,6 @@ import { buildKeyQuickPickItems } from "./apiKeyDisplay";
  */
 export interface KeyManagerContext {
     secrets: vscode.SecretStorage;
-}
-
-/**
- * 查询余额/套餐用量流程（key 绑定的平台登录凭据）。
- *
- * 无凭据时提示先绑定（不弹输入框——与上游 TokenRhythm 一致，余额显示
- * 依赖已绑定的凭据，未绑定时管理界面显示"余额未知"）；查询失败
- * （凭据失效/网络）时提示查看输出通道，不弹输入框。
- */
-export async function queryBalanceFlow(ctx: KeyManagerContext): Promise<void> {
-    const store = await getApiKeyStore(ctx.secrets);
-    const credential = pickAccountCredential(store);
-    if (!credential) {
-        vscode.window.showWarningMessage(l10n("No platform login credential bound. Bind one via Bind/Update Credential."));
-        return;
-    }
-    const info = await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: l10n("Querying balance...") },
-        () => getAccountInfoCached(credential, getBalanceCheckIntervalSec()),
-    );
-    if (!info) {
-        // 查询失败（token 失效/网络）→ 提示查看输出通道，不弹输入框
-        vscode.window.showWarningMessage(l10n("Failed to query balance (token may be expired)"));
-        return;
-    }
-    // 展示余额（与上游一致：只显示余额，不做套餐重置）
-    const lines: string[] = [];
-    lines.push(l10nFormat("Voucher balance: ¥{0} ({1} vouchers)", info.voucherAvailableCny.toFixed(2), String(info.vouchers.filter((v) => v.available > 0).length)));
-    lines.push(l10nFormat("Cash balance: ¥{0}", info.balance.toFixed(2)));
-    vscode.window.showInformationMessage(lines.join("\n"), { modal: true });
 }
 
 /**
@@ -347,7 +314,7 @@ export async function checkAllAvailabilityFlow(ctx: KeyManagerContext): Promise<
 }
 
 /**
- * 检测可用性二级界面：列出全部 key 状态 + "检测所有" + "查询余额" + "返回"。
+ * 检测可用性二级界面：列出全部 key 状态 + "检测所有" + "返回"。
  */
 export async function showCheckMenu(ctx: KeyManagerContext): Promise<void> {
     while (true) {
@@ -360,7 +327,6 @@ export async function showCheckMenu(ctx: KeyManagerContext): Promise<void> {
 
         items.push({ label: "", kind: vscode.QuickPickItemKind.Separator });
         items.push({ label: `$(beaker) ${l10n("Check All Availability")}`, action: "checkAll" });
-        items.push({ label: `$(coin) ${l10n("Query Balance / Plan Usage")}`, action: "queryBalance" });
         items.push({ label: `$(arrow-left) ${l10n("Back")}`, action: "back" });
 
         const picked = await vscode.window.showQuickPick(items, {
@@ -380,9 +346,6 @@ export async function showCheckMenu(ctx: KeyManagerContext): Promise<void> {
             continue;
         } else if (action === "checkAll") {
             await checkAllAvailabilityFlow(ctx);
-            continue;
-        } else if (action === "queryBalance") {
-            await queryBalanceFlow(ctx);
             continue;
         } else {
             return; // back or cancel

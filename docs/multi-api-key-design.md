@@ -388,7 +388,7 @@ while (true):
 
 | 命令 | 说明 |
 |------|------|
-| `senseaudio.manageApiKeys` | 多 Key 管理 QuickPick（增删/批量导入/设为当前/绑定 cookie/重置失效/检测可用性/编辑/查询余额），也是 provider 齿轮入口 |
+| `senseaudio.manageApiKeys` | 多 Key 管理 QuickPick（增删/批量导入/设为当前/绑定平台登录凭据/重置失效/检测可用性/编辑），也是 provider 齿轮入口 |
 | `senseaudio.checkUsage` | 刷新套餐用量与余额（仅绑定状态栏点击，命令面板隐藏） |
 
 ---

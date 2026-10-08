@@ -619,7 +619,7 @@ test/                                     # 测试脚本（运行前需 npm run 
 | `commands/registerCommands.ts` | ~90 | 注册全部 7 条命令（manageApiKeys / openSettings / generateGitCommitMessage / abortGitCommitMessage / syncPush / syncPull / checkUsage）+ `onDidChangeConfiguration` 监听（apiMode / enableAutoModelDiscovery 变化时刷新模型列表） |
 | `commands/apiKeyManagerUi.ts` | ~171 | `showApiKeyManager()` 主入口：**仅渲染主菜单 + 分发动作**（增删/批量导入/设为当前（仅 single 模式）/绑定平台登录凭据/重置失效/检测可用性/编辑 key）；具体流程委托 `apiKeyFlows.ts`，展示委托 `apiKeyDisplay.ts` |
 | `commands/apiKeyDisplay.ts` | ~138 | **key 展示辅助**（2026-09-28 新增，纯函数）：`formatBalanceDetailText`（余额格式化）、`fetchAccountInfo`（TTL 缓存查询）、`buildKeyDetailLine`（单 key 详情行）、`buildKeyQuickPickItems`（key 列表 QuickPick 项）。主界面 / key 选择界面 / 检测二级界面共用，展示逻辑只写一处 |
-| `commands/apiKeyFlows.ts` | ~470 | **key 管理交互流程**（2026-09-28 新增）：`KeyManagerContext` 接口 + `queryBalanceFlow` / `addKeyFlow` / `parseBatchImport` / `batchImportFlow`（`key---credential---备注;` 单行格式）/ `deleteKeysFlow`（多选 + 循环 + 返回）/ `pickKey` / `checkAvailabilityFlow` / `checkAllAvailabilityFlow` / `showCheckMenu` / `bindCredentialFlow` / `editKeyFlow` |
+| `commands/apiKeyFlows.ts` | ~470 | **key 管理交互流程**（2026-09-28 新增）：`KeyManagerContext` 接口 + `addKeyFlow` / `parseBatchImport` / `batchImportFlow`（`key---credential---备注;` 单行格式）/ `deleteKeysFlow`（多选 + 循环 + 返回）/ `pickKey` / `checkAvailabilityFlow` / `checkAllAvailabilityFlow` / `showCheckMenu` / `bindCredentialFlow` / `editKeyFlow` |
 | `commands/checkUsageCommand.ts` | ~60 | `checkUsageCommand()`：强制刷新套餐用量（绕过 TTL）并弹窗展示三窗口使用率 + 余额；区分未绑定凭据 / 401 失效 / 一般失败三种错误。仅绑定状态栏点击（命令面板隐藏） |
 | `core/logger.ts` | ~43 | 日志输出 (LogOutputChannel) |
 | `core/localize.ts` | ~213 | 中英文国际化 |
@@ -705,9 +705,6 @@ test/                                     # 测试脚本（运行前需 npm run 
 #### `interface KeyManagerContext`
 `{ secrets: vscode.SecretStorage }` — 流程上下文。平台登录凭据（PASETO token）随 key 存在 SecretStorage 的 store 中（`ApiKeyEntry.credential`），不再单独存 globalState。
 
-#### `queryBalanceFlow(ctx): Promise<void>`
-查询余额/套餐用量流程（key 绑定的平台登录凭据）。**无凭据时提示先绑定（不弹输入框——与上游 TokenRhythm 一致，余额显示依赖已绑定的凭据，未绑定时管理界面显示"余额未知"）**；查询失败（凭据失效/网络）时提示查看输出通道，不弹输入框。
-
 #### `addKeyFlow(ctx): Promise<boolean>`
 添加单个 key 流程（依次输入 key → 凭据 → label 三元组）。重复值提示已存在并返回 false。
 
@@ -730,7 +727,7 @@ test/                                     # 测试脚本（运行前需 npm run 
 检测全部 key 的可用性（带进度条遍历），汇总"可用/不可用/未知"。
 
 #### `showCheckMenu(ctx): Promise<void>`
-检测可用性二级界面：列出全部 key 状态（`buildKeyQuickPickItems`）+ "检测所有" + "查询余额" + "返回"。
+检测可用性二级界面：列出全部 key 状态（`buildKeyQuickPickItems`）+ "检测所有" + "返回"。
 
 #### `bindCredentialFlow(ctx, index): Promise<void>`
 绑定/更新平台登录凭据流程（空输入 = 清除）。
