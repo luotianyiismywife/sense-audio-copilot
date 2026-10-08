@@ -15,10 +15,12 @@ const require = createRequire(import.meta.url);
 // ── VS Code 运行时 shim ──
 const Module = require("node:module");
 const originalLoad = Module._load;
+// 可覆盖的配置（测试用）：键为 senseaudio 配置项名（不含前缀）
+const configOverrides = {};
 const vscodeShim = {
     workspace: {
         getConfiguration: () => ({
-            get: (_key, fallback) => fallback,
+            get: (key, fallback) => (key in configOverrides ? configOverrides[key] : fallback),
         }),
     },
 };
@@ -164,6 +166,49 @@ check("402 状态码边界：status 4020 不误匹配 status 402", () => {
 check("401 + 响应体含'余额不足' → 仍归类为 invalid（非 balance）", () => {
     const err = apiError(401, "无效 Key，余额不足");
     assert.equal(getKeyRotationReason(err), "invalid");
+});
+
+// ---------------------------------------------------------------------------
+// 8. 瞬态上游错误（upstream_stream_error，400）—— 平台侧问题，不是 key 问题
+//    （2026-10-09 实测：曾被当作 api_error 持久化禁用 key）
+// ---------------------------------------------------------------------------
+console.log("瞬态上游错误 upstream_stream_error");
+
+const upstreamErr = () =>
+    new Error(
+        'API error: [400] Bad Request\n{"is_bifrost_error":false,"error":{"type":"api_error","code":"upstream_stream_error","message":"The upstream model stream ended unexpectedly. Please retry the request."}}\n\nURL: https://api.senseaudio.cn/v1/chat/completions'
+    );
+
+check("upstream_stream_error 命中瞬态重试（应退避重试同一个 key）", () => {
+    assert.equal(isTransientRetryError(upstreamErr()), true);
+});
+
+check("upstream_stream_error 归类为 server_error（仅冷却，不持久化）", () => {
+    assert.equal(getKeyRotationReason(upstreamErr()), "server_error");
+});
+
+check("upstream_stream_error 不命中轮换（默认配置）", () => {
+    assert.equal(isKeyRotationError(upstreamErr()), false);
+});
+
+check("即使 400 被配置进轮换状态码，upstream_stream_error 仍不轮换", () => {
+    configOverrides["apiKeyRotationStatusCodes"] = [401, 402, 429, 503, 400];
+    try {
+        assert.equal(isKeyRotationError(upstreamErr()), false);
+        assert.equal(isTransientRetryError(upstreamErr()), true);
+        assert.equal(getKeyRotationReason(upstreamErr()), "server_error");
+    } finally {
+        delete configOverrides["apiKeyRotationStatusCodes"];
+    }
+});
+
+check("普通 400（非 upstream_stream_error）在 400 入轮换配置时仍轮换", () => {
+    configOverrides["apiKeyRotationStatusCodes"] = [401, 402, 429, 503, 400];
+    try {
+        assert.equal(isKeyRotationError(apiError(400)), true);
+    } finally {
+        delete configOverrides["apiKeyRotationStatusCodes"];
+    }
 });
 
 Module._load = originalLoad;

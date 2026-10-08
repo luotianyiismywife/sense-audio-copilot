@@ -14,6 +14,22 @@ import type { ApiKeyEntry, KeyDisplayStatus } from "./types";
  */
 const TRANSIENT_REASONS = new Set(["rate_limited", "server_error"]);
 
+/**
+ * 已知的瞬态上游错误签名（消息文本，小写匹配）。
+ *
+ * 上游模型流意外中断（`upstream_stream_error`，HTTP 400）等错误消息明确要求
+ * 重试（"Please retry the request"），属**平台侧瞬态问题**而非 key 问题——
+ * 应像 500 一样退避重试同一个 key，而非轮换 key 或持久化禁用 key。
+ * （2026-10-09 实测：该错误曾被当作 api_error 持久化 available=false，
+ * 导致 key 被永久禁用。）
+ */
+const TRANSIENT_UPSTREAM_SIGNATURES = ["upstream_stream_error"];
+
+/** 错误消息（小写）是否命中已知的瞬态上游错误签名 */
+function isTransientUpstreamError(message: string): boolean {
+    return TRANSIENT_UPSTREAM_SIGNATURES.some((sig) => message.includes(sig));
+}
+
 /** 是否为瞬态失效原因（429 限流 / 503 服务端繁忙） */
 export function isTransientExhaustedReason(reason: string): boolean {
     return TRANSIENT_REASONS.has(reason);
@@ -63,6 +79,11 @@ export async function hasTransientExhaustedKey(secrets: vscode.SecretStorage): P
  */
 export function isKeyRotationError(err: unknown): boolean {
     const message = (err instanceof Error ? err.message : String(err)).toLowerCase();
+    // 瞬态上游错误（如 upstream_stream_error）是平台侧问题，不是 key 问题——
+    // 即使其状态码（400）被配置进轮换列表，也不应轮换 key（交由瞬态重试处理）。
+    if (isTransientUpstreamError(message)) {
+        return false;
+    }
     const statusCodes = getRotationStatusCodes();
     const patterns = getRotationErrorPatterns();
 
@@ -92,6 +113,10 @@ export function isTransientRetryError(err: unknown): boolean {
         if (message.includes(`[${code}]`) || message.includes(`status ${code}`)) {
             return true;
         }
+    }
+    // 已知瞬态上游错误（如 upstream_stream_error）：应退避重试同一个 key
+    if (isTransientUpstreamError(message)) {
+        return true;
     }
     return false;
 }
@@ -128,6 +153,10 @@ export function getKeyRotationReason(err: unknown): string {
     // 封号：400 + code=billing / "计费账户已被冻结"（确定性失败，持久化不可用）
     if (message.includes("计费账户已被冻结") || message.includes("\"code\":\"billing\"") || message.includes("ref_code:400901") || message.includes("ref_code\":400901")) {
         return "banned";
+    }
+    // 瞬态上游错误（如 upstream_stream_error）→ server_error（仅冷却，不持久化）
+    if (isTransientUpstreamError(message)) {
+        return "server_error";
     }
     return "api_error";
 }
