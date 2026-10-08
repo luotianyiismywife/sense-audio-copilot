@@ -8,8 +8,8 @@ export interface ApiKeyEntry {
     value: string;
     /** 可选备注 */
     label?: string;
-    /** tr_session cookie（可选；一个 cookie 可绑定多个 key，余额按 cookie 粒度查询） */
-    cookie?: string;
+    /** 平台登录凭据（PASETO token，可选；一个凭据可绑定多个 key，余额按凭据粒度查询） */
+    credential?: string;
     /** 可用性：true=可用 / false=不可用(余额不足或失效) / null=未检测 */
     available?: boolean | null;
     /** 最近一次检测时间戳（ms） */

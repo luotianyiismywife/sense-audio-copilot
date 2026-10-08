@@ -36,8 +36,8 @@ let statusBarHideTimer: NodeJS.Timeout | null = null;
 let lastTokenText = "$(pulse) --";
 
 // ── Plan usage polling state (mirrors upstream opencode-go-copilot) ──
-/** Login-token provider, injected by `initStatusBar` (token lives in globalState). */
-let usageTokenProvider: (() => string | undefined) | undefined;
+/** Account credential provider, injected by `initStatusBar` (credential lives in the key store). */
+let usageCredentialProvider: (() => Promise<string | undefined>) | undefined;
 /** Status bar item reference for background re-renders. */
 let usageStatusBarItem: vscode.StatusBarItem | undefined;
 /** Background refresh timer. */
@@ -75,12 +75,12 @@ function getUsageRefreshIntervalMs(): number {
  * text and tooltip are re-rendered so the next glance/hover shows fresh data.
  */
 async function refreshPlanUsage(): Promise<void> {
-    if (usageRefreshInFlight || !usageTokenProvider) {
+    if (usageRefreshInFlight || !usageCredentialProvider) {
         return;
     }
-    const token = usageTokenProvider();
+    const token = await usageCredentialProvider();
     if (!token) {
-        logger.debug("planUsage.poll.skip", { reason: "no-token" });
+        logger.debug("planUsage.poll.skip", { reason: "no-credential" });
         return;
     }
     usageRefreshInFlight = true;
@@ -125,7 +125,7 @@ function startUsagePolling(): void {
  * by clicking the status bar item) and re-render once fresh data arrives.
  */
 export async function refreshPlanUsageNow(): Promise<PlanUsageSnapshot | null> {
-    const token = usageTokenProvider?.();
+    const token = await usageCredentialProvider?.();
     if (!token) {
         return null;
     }
@@ -224,7 +224,7 @@ function appendPlanUsageTooltipLines(lines: string[]): void {
 
 export function initStatusBar(
     context: vscode.ExtensionContext,
-    getLoginToken?: () => string | undefined,
+    getCredential?: () => Promise<string | undefined>,
 ): vscode.StatusBarItem {
     // Reset cumulative counters on VS Code startup
     resetCumulativeCounters();
@@ -238,9 +238,9 @@ export function initStatusBar(
     context.subscriptions.push(tokenCountStatusBarItem);
 
     // Plan usage polling for the status bar text and tooltip section
-    usageTokenProvider = getLoginToken;
+    usageCredentialProvider = getCredential;
     usageStatusBarItem = tokenCountStatusBarItem;
-    if (getLoginToken) {
+    if (getCredential) {
         startUsagePolling();
     }
     context.subscriptions.push({ dispose: stopUsagePolling });

@@ -27,7 +27,7 @@
 | 能力 | 说明 |
 |------|------|
 | **Chat 模型提供商** | 实现 `LanguageModelChatProvider` 接口，向 VS Code 注册为 `senseaudio` 厂商 |
-| **多 API Key 轮询** | 支持多个 API Key（SecretStorage 加密存储 `senseaudio.apiKeys`），三种模式：`sticky`（默认，固定使用一个 key，仅失效时切下一个并钉住——前缀缓存命中率最高，切换后不自动切回）/ `rotation`（轮询使用、跳过不可用 key）/ `single`（仅用当前 key；`senseaudio.singleKeyFallback`（默认 `switch`）下**仅在余额不足（402）时**自动切换到下一个可用 key 并经 `setActiveKeyByValue` 设为当前使用 + 右下角弹窗提示——401 无效 Key / 429 限流 / 503 繁忙等其他错误不切换、走 single 专属报错文案；`error` 下任何错误都直接报错不切换）。**被动检测**：按请求错误（402 余额不足 / 401 无效 Key / 429 限流 / 503 服务端繁忙，状态码与文本 patterns 均可配置）判定 key 失效并切换——**402/401 持久化 `available=false`（确定性），429/503 仅内存冷却不持久化（瞬态，冷却到期自动恢复）**。**手动检测**：`senseaudio.manageApiKeys` 命令 QuickPick 管理（增删/设为当前/绑定 cookie/重置失效/检测可用性——最小真实聊天请求 `say ok`，实测余额不足时 402 拦截不耗 token）。**UI 增强**：表单式批量导入（三元组 key/cookie/备注，逐条输入）、检测二级界面（列出全部 key 状态 + "检测所有"选项）、编辑 API Key（三字段 value/cookie/label，冲突校验）、**轮询模式下隐藏"设为当前使用"**（★ Current 标记与动作项均仅 single 模式显示）、批量导入时已存在 key 自动更新 cookie 不重复添加、**所有 key 管理界面（主界面 / 检测二级界面 / 删除·设当前·编辑·绑定·清除 cookie 的 key 选择界面）均显示账号余额**（登录 PASETO token 经 `getAccountInfoCached` TTL 缓存查询 `platform.senseaudio.cn/api/user/self`，余额按**账号**粒度、所有 key 共享：现金余额显示 `$(coin)/$(error) 充值 ¥X.XX`（> `minBalanceCny` 为 coin、≤ 为 error），代金券可用显示 `$(gift) 赠送 ¥Y.YY`（> 0 时显示，附 `（至 YYYY-MM-DD）` 最早到期日，本地时区格式化），查询失败显示 `$(warning) 余额未知`）。**全部 key 用尽时**：轮换循环跟踪每个 key 的失败原因，报错列出脱敏 key + 原因（如 `sk_****abcd: 服务端繁忙 (503)`），并区分"瞬态失败请稍后重试"（429/503）与"确定性失败请检测"（402/401）；`pickNextApiKey` 无可用 key 的兜底报错同样列出每个 key 的原因（`buildAllKeysUnavailableDetail`）。**瞬态自动重试**：全部 key 均因瞬态错误（默认 429/500/503，状态码可配置 `senseaudio.transientRetryStatusCodes`，与触发轮换的状态码解耦）失败时，按 `senseaudio.transientRetryTimes`（默认 3）自动重试整轮——指数退避等待（2s/4s/8s，上限 8s）且**重试前清空瞬态冷却**（`resetExhaustedKeys(secrets,false)`，否则冷却期间 `pickNextApiKey` 会跳过全部 key 使重试无效），重试次数用尽后才报错。**平台侧错误不换 key**：500 Internal Server Error 是平台问题而非 key 问题——它命中瞬态重试但**不**命中轮换状态码，因此**不标记 key、不换 key**，仅退避后重试同一个 key（日志 `key.transientRetrySameKey`）。**瞬态判定（`isTransientRetryError`）**：错误命中瞬态重试状态码但原因非瞬态（如 500→`api_error`）时，规范化为 `server_error` 仅内存冷却不持久化，保证整轮重试可重新选 key。旧版单 key `senseaudio.apiKey` 自动迁移。`/v1/models` 实测不校验余额（余额 < 0 也 200），模型列表/启动同步用任意有效 key 即可。**key 三元组不随 VS Code 设置同步（2026-10-07 确认）**：SecretStorage 数据被 VS Code Settings Sync 设计上排除（每台机器独立加密，永不同步）——换机器/重装后 key 列表为空；跨机器迁移走下方「云同步（GitHub Gist）」的 `senseaudio.syncPush` / `syncPull`，或手动批量导入重新录入 |
+| **多 API Key 轮询** | 支持多个 API Key（SecretStorage 加密存储 `senseaudio.apiKeys`），三种模式：`sticky`（默认，固定使用一个 key，仅失效时切下一个并钉住——前缀缓存命中率最高，切换后不自动切回）/ `rotation`（轮询使用、跳过不可用 key）/ `single`（仅用当前 key；`senseaudio.singleKeyFallback`（默认 `switch`）下**仅在余额不足（402）时**自动切换到下一个可用 key 并经 `setActiveKeyByValue` 设为当前使用 + 右下角弹窗提示——401 无效 Key / 429 限流 / 503 繁忙等其他错误不切换、走 single 专属报错文案；`error` 下任何错误都直接报错不切换）。**被动检测**：按请求错误（402 余额不足 / 401 无效 Key / 429 限流 / 503 服务端繁忙，状态码与文本 patterns 均可配置）判定 key 失效并切换——**402/401 持久化 `available=false`（确定性），429/503 仅内存冷却不持久化（瞬态，冷却到期自动恢复）**。**手动检测**：`senseaudio.manageApiKeys` 命令 QuickPick 管理（增删/设为当前/绑定平台登录凭据/重置失效/检测可用性——最小真实聊天请求 `say ok`，实测余额不足时 402 拦截不耗 token）。**UI 增强**：表单式批量导入（三元组 key/凭据/备注，逐条输入）、检测二级界面（列出全部 key 状态 + "检测所有"选项）、编辑 API Key（三字段 value/凭据/label，冲突校验）、**轮询模式下隐藏"设为当前使用"**（★ Current 标记与动作项均仅 single 模式显示）、批量导入时已存在 key 自动更新凭据不重复添加、**所有 key 管理界面（主界面 / 检测二级界面 / 删除·设当前·编辑·绑定·清除凭据的 key 选择界面）均显示账号余额**（key 绑定的平台登录凭据经 `getAccountInfoCached` TTL 缓存查询 `platform.senseaudio.cn/api/user/self`，余额按**账号**粒度、所有 key 共享：现金余额显示 `$(coin)/$(error) 充值 ¥X.XX`（> `minBalanceCny` 为 coin、≤ 为 error），代金券可用显示 `$(gift) 赠送 ¥Y.YY`（> 0 时显示，附 `（至 YYYY-MM-DD）` 最早到期日，本地时区格式化），查询失败显示 `$(warning) 余额未知`）。**全部 key 用尽时**：轮换循环跟踪每个 key 的失败原因，报错列出脱敏 key + 原因（如 `sk_****abcd: 服务端繁忙 (503)`），并区分"瞬态失败请稍后重试"（429/503）与"确定性失败请检测"（402/401）；`pickNextApiKey` 无可用 key 的兜底报错同样列出每个 key 的原因（`buildAllKeysUnavailableDetail`）。**瞬态自动重试**：全部 key 均因瞬态错误（默认 429/500/503，状态码可配置 `senseaudio.transientRetryStatusCodes`，与触发轮换的状态码解耦）失败时，按 `senseaudio.transientRetryTimes`（默认 3）自动重试整轮——指数退避等待（2s/4s/8s，上限 8s）且**重试前清空瞬态冷却**（`resetExhaustedKeys(secrets,false)`，否则冷却期间 `pickNextApiKey` 会跳过全部 key 使重试无效），重试次数用尽后才报错。**平台侧错误不换 key**：500 Internal Server Error 是平台问题而非 key 问题——它命中瞬态重试但**不**命中轮换状态码，因此**不标记 key、不换 key**，仅退避后重试同一个 key（日志 `key.transientRetrySameKey`）。**瞬态判定（`isTransientRetryError`）**：错误命中瞬态重试状态码但原因非瞬态（如 500→`api_error`）时，规范化为 `server_error` 仅内存冷却不持久化，保证整轮重试可重新选 key。旧版单 key `senseaudio.apiKey` 自动迁移。`/v1/models` 实测不校验余额（余额 < 0 也 200），模型列表/启动同步用任意有效 key 即可。**key 三元组不随 VS Code 设置同步（2026-10-07 确认）**：SecretStorage 数据被 VS Code Settings Sync 设计上排除（每台机器独立加密，永不同步）——换机器/重装后 key 列表为空；跨机器迁移走下方「云同步（GitHub Gist）」的 `senseaudio.syncPush` / `syncPull`，或手动批量导入重新录入 |
 | **多模型支持** | 内置 16 个模型定义，覆盖 6 大模型系列，统一通过推理强度选择器切换思考模式。支持自动模型发现：开启后从 API 获取模型列表，自动过滤不可用模型并发现新增模型 |
 | **自动模型发现** | 通过 `senseaudio.enableAutoModelDiscovery` 配置（默认开启）。启动时从 `/v1/models` 获取当前可用模型 ID 列表及能力标记（含 `supports_responses`），过滤内置模型列表（不可用模型自动隐藏）。新增模型元数据以 **`/v1/models` 完整元数据为主源**（`context_length` / `max_completion_tokens` / `supports_vision` / `supports_reasoning` / `supports_tools`），models.dev 仅提供友好名称与回退规格——**models.dev 未收录或拉取失败时不再降级为 128K 上下文 / 4096 输出兜底**（2026-09-03 修复：曾导致 glm-5.3-flash 等自动发现模型上下文显示缩水为 102K、4096 输出上限被推理耗尽后正文为空，Copilot Chat 报 "Sorry, no response was returned."）；两源均未知输出上限时不发送 `max_completion_tokens`（交由服务端默认值）。`thinkingMode` 从 `supports_reasoning` 推断（支持推理→switchable，不支持→always）。API 不可用时静默回退到全量内置列表。内存缓存（5 分钟 TTL）。**按 API 模式过滤**：模型列表还会按 `senseaudio.apiMode` 过滤——`auto`/`openai` 显示全部（所有模型均支持 OpenAI 格式），`anthropic` 仅显示 `supports_anthropic=true` 的模型，`responses` 仅显示 `supports_responses=true` 的模型；能力集合为空（API 探测失败）时回退显示全部。**动态刷新**：通过 `onDidChangeLanguageModelChatInformation` 事件（VS Code 1.125+），切换 `apiMode` / `enableAutoModelDiscovery` 设置时自动重新拉取模型列表并刷新选择器，**无需 reload 窗口** |
 | **启动模型同步** | 通过 `senseaudio.syncModelsOnStartup` 配置（默认开启）。每次 VS Code 打开时自动检查 API 是否有新模型，**每日最多同步一次**（`globalState` 记录上次同步日期）。同步结果以**一行日志**输出到「SenseAudio」输出通道（`models.sync` 标签，含状态/说明），**不写任何文件**（v1.7.0 起不再写工作区 `.copilot/model-sync-log.md`——该文件会污染用户仓库，见 issue #1）。无 API Key、API 不可用时记录失败事件且不标记为已同步（下次打开重试） |
@@ -41,7 +41,7 @@
 | **状态栏** | 实时显示当前会话 token 使用量、累计用量、缓存命中率 |
 | **原生 Token 指示器** | 始终启用，向 Copilot Chat 原生 Token 指示器报告 token 用量。通过发送 MIME 类型为 `usage` 的 `LanguageModelDataPart`（TextEncoder 编码 JSON）实现，无需自建状态栏。依赖 VS Code/Copilot Chat 1.116+ 对外部模型 `usage` data part 的识别 |
 | **高级 Token 指示器** | 可通过 `senseaudio.enableThirdPartyTokenIndicator` 配置（**默认关闭**）控制 VS Code 状态栏中的高级Token计数器。关闭后仅显示原生指示器（原生指示器始终上报）。**状态栏可见性由 `isStatusBarEnabled()` 决定 = 高级 Token 指示器 OR 套餐用量显示（`showUsageInStatusBar` / `showUsageInTooltip`）**——不能只用 `enableThirdPartyTokenIndicator` 把关，否则套餐用量功能将永远不可见。状态栏**仅在用户实际使用本插件提供的模型时显示**：启动时隐藏，发起 senseaudio 模型请求时显示，停止使用（空闲 60 秒）后自动隐藏，避免使用其他模型时残留上下文信息 |
-| **套餐用量与余额显示** | 状态栏主文本显示**套餐用量**（对标上游 opencode-go-copilot 的 `Go 5H 65%`）：额度内显示 `$(pulse) 5H 65%`（5 小时限流窗口），额度耗尽显示 `$(pulse) 余额 ¥358.78`；悬停提示展示 5h/周/月三窗口（`5H——0% (0 / 10,000 积分)`）+ 5h 重置倒计时 + 余额 + 计费模式说明。**两套计费规则严格区分**（官方文档 token-plan）：① **周期额度**（5h/周）是**限流窗口**，耗尽后等下一周期自动恢复、**不消耗余额**；② **套餐积分**（月度 `credit_30d_limit`）才是**订阅额度**，耗尽后走超额策略——`enable_extra_usage=true` 则按量计费（代金券→现金），否则**降级 Free 版**。三态 `billingMode`：`plan`/`extra`/`free`。数据源 `GET platform.senseaudio.cn/api/user/self`（Bearer 登录 PASETO token），TTL 缓存 + **失败保留旧快照**（静默降级）。后台轮询（`senseaudio.usageRefreshInterval` 默认 5 分钟）+ 点击状态栏强制刷新。配置：`showUsageInStatusBar`（默认开，关闭则主文本改显 Token 计数）、`showUsageInTooltip`（默认开）。**⚠️ 单位陷阱**：代金券积分 `1 元 = 1,000,000 积分`（`POINTS_PER_CNY`，2026-09-27 实测校正，曾误用 5000 导致 200 倍误差），与套餐积分**不是同一单位**。实现见 `src/balance/planUsage.ts`，设计/移植指南见 `docs/plan-usage-design.md` |
+| **套餐用量与余额显示** | 状态栏主文本显示**套餐用量**（对标上游 opencode-go-copilot 的 `Go 5H 65%`）：额度内显示 `$(pulse) 5H 65%`（5 小时限流窗口），额度耗尽显示 `$(pulse) 余额 ¥358.78`；悬停提示展示 5h/周/月三窗口（`5H——0% (0 / 10,000 积分)`）+ 5h 重置倒计时 + 余额 + 计费模式说明。**两套计费规则严格区分**（官方文档 token-plan）：① **周期额度**（5h/周）是**限流窗口**，耗尽后等下一周期自动恢复、**不消耗余额**；② **套餐积分**（月度 `credit_30d_limit`）才是**订阅额度**，耗尽后走超额策略——`enable_extra_usage=true` 则按量计费（代金券→现金），否则**降级 Free 版**。三态 `billingMode`：`plan`/`extra`/`free`。数据源 `GET platform.senseaudio.cn/api/user/self`（Bearer 平台登录凭据 PASETO token，取自 key store 的 `ApiKeyEntry.credential`），TTL 缓存 + **失败保留旧快照**（静默降级）。后台轮询（`senseaudio.usageRefreshInterval` 默认 5 分钟）+ 点击状态栏强制刷新。配置：`showUsageInStatusBar`（默认开，关闭则主文本改显 Token 计数）、`showUsageInTooltip`（默认开）。**⚠️ 单位陷阱**：代金券积分 `1 元 = 1,000,000 积分`（`POINTS_PER_CNY`，2026-09-27 实测校正，曾误用 5000 导致 200 倍误差），与套餐积分**不是同一单位**。实现见 `src/balance/planUsage.ts`，设计/移植指南见 `docs/plan-usage-design.md` |
 | **Git 提交消息生成** | 一键生成 Conventional Commit 格式的 Git 提交消息，支持 `auto` 语言模式自动从历史提交检测语言 |
 | **多仓库支持** | 支持多根工作区 (multi-root) 中多个 Git 仓库的提交消息生成 |
 | **模型预设** | 支持通过 `senseaudio.modelPreset` 设置切换 temperature/top_p 预设（🎯 Precise/⚖️ Balanced/🔥 Creative），也支持手动自定义输入 |
@@ -151,15 +151,15 @@ activate(context)
   │       ├── senseaudio.openSettings             ← 打开扩展设置页
   │       ├── senseaudio.generateGitCommitMessage ← 生成提交消息
   │       ├── senseaudio.abortGitCommitMessage    ← 中止生成
-  │       ├── senseaudio.syncPush                 ← 推送 key/cookie/备注 到云端 Gist
-  │       ├── senseaudio.syncPull                 ← 从云端 Gist 拉取 key/cookie/备注
+  │       ├── senseaudio.syncPush                 ← 推送 key/凭据/备注 到云端 Gist
+  │       ├── senseaudio.syncPull                 ← 从云端 Gist 拉取 key/凭据/备注
   │       └── senseaudio.checkUsage               ← 刷新套餐用量（仅绑定状态栏点击，命令面板隐藏）
   ├── syncModelsOnStartup(context)           ← 启动模型同步（每日最多一次，结果以一行日志输出）
   ├── autoPullOnStartup(context)             ← 启动云同步自动拉取（静默，云端更新时覆盖本地）
   └── 注册 dispose 清理
 ```
 
-> `initStatusBar(context, getLoginToken)` 同时启动**套餐用量后台轮询**（`startUsagePolling`），
+> `initStatusBar(context, getCredential)` 同时启动**套餐用量后台轮询**（`startUsagePolling`），
 > 状态栏主文本显示 5h 窗口用量、悬停提示显示三窗口 + 余额（见 4.15）。
 
 ### 2.3 聊天请求处理流程
@@ -494,7 +494,7 @@ src/
 │   ├── registerCommands.ts               # 全部命令注册 + 配置变更监听
 │   ├── apiKeyManagerUi.ts                # manageApiKeys 主入口（渲染菜单 + 分发动作）
 │   ├── apiKeyDisplay.ts                  # key 展示辅助（余额格式化 / 详情行 / QuickPick 项，三界面共用）
-│   ├── apiKeyFlows.ts                    # key 管理交互流程（增删改/导入/检测/cookie）
+│   ├── apiKeyFlows.ts                    # key 管理交互流程（增删改/导入/检测/凭据）
 │   ├── checkUsageCommand.ts              # 套餐用量刷新（senseaudio.checkUsage，仅状态栏点击）
 ├── core/                                 # 基础设施
 │   ├── logger.ts                         # 日志系统
@@ -601,10 +601,10 @@ test/                                     # 测试脚本（运行前需 npm run 
 | `keys/types.ts` | ~34 | `ApiKeyEntry` / `ApiKeyStore` / `ApiKeyMode` / `SingleKeyFallback` / `KeyDisplayStatus` |
 | `keys/config.ts` | ~61 | 模式、轮换状态码、错误 patterns、瞬态重试状态码、冷却时长、重试次数配置读取 |
 | `keys/state.ts` | ~30 | 模块级可变状态：store 缓存、轮询游标、瞬态冷却表（独立成文件避免循环依赖） |
-| `keys/store.ts` | ~194 | SecretStorage 读写与旧版单 key 迁移、`addApiKey`/`addApiKeys`/`removeApiKey`/`setActiveKey`/`setKeyCookie`/`updateApiKey` |
+| `keys/store.ts` | ~194 | SecretStorage 读写与旧版单 key 迁移、`addApiKey`/`addApiKeys`/`removeApiKey`/`setActiveKey`/`setKeyCredential`/`updateApiKey` |
 | `keys/selection.ts` | ~110 | `getPrimaryApiKey` / `pickNextApiKey`（rotation 前移 / sticky 钉住）/ `shouldSingleKeyFallbackSwitch` / `setActiveKeyByValue` |
 | `keys/health.ts` | ~216 | 瞬态冷却（`getTransientExhaustedInfo`）、`isApiKeyEligible`、`isKeyRotationError`、`isTransientRetryError`、`getKeyRotationReason`、`getKeyUnavailableReason`、`markApiKeyExhausted`/`markApiKeyAvailable`/`updateKeyAvailability`/`resetExhaustedKeys`、`getKeyDisplayStatus` |
-| `keys/mask.ts` | ~18 | `maskApiKey` / `maskCookie` 脱敏 |
+| `keys/mask.ts` | ~18 | `maskApiKey` / `maskCredential` 脱敏 |
 | `balance/balanceCheck.ts` | ~21 | barrel：统一导出 `balance/` 下全部 API |
 | `balance/config.ts` | ~26 | 余额阈值 / TTL 配置读取 + `toNumber`（金额字符串转 number 防御） |
 | `balance/accountInfo.ts` | ~200 | 平台用户中心账号信息：`queryAccountInfo`（`GET platform.senseaudio.cn/api/user/self`，Bearer PASETO token）、`getAccountInfoWithStatus`（带状态：ok/unauthorized/error）、`getAccountInfoCached`（TTL 缓存）、`formatExpiryDate`（代金券到期日）、`POINTS_PER_CNY`（1 元 = 1,000,000 积分）、`AccountInfo` / `PlanUsageWindow` 类型 |
@@ -617,10 +617,10 @@ test/                                     # 测试脚本（运行前需 npm run 
 | `models/modelSync.ts` | ~83 | 启动模型同步：每日最多一次检查 API 新模型（`globalState` 记录日期），同步结果以一行日志输出到「SenseAudio」Output 通道（`models.sync` 标签），**不写文件**（v1.7.0 移除工作区 `.copilot/model-sync-log.md`，见 issue #1），无 Key/API 不可用记录失败且不标记已同步 |
 | `models/provideModel.ts` | ~280 | 模型信息提供函数（含自动发现）：**先读 `enableAutoModelDiscovery` 开关**（关闭则直接用内置列表）、过滤内置模型、从 API 和 models.dev 自动发现新增模型、按 apiMode 过滤 |
 | `commands/registerCommands.ts` | ~90 | 注册全部 7 条命令（manageApiKeys / openSettings / generateGitCommitMessage / abortGitCommitMessage / syncPush / syncPull / checkUsage）+ `onDidChangeConfiguration` 监听（apiMode / enableAutoModelDiscovery 变化时刷新模型列表） |
-| `commands/apiKeyManagerUi.ts` | ~171 | `showApiKeyManager()` 主入口：**仅渲染主菜单 + 分发动作**（增删/批量导入/设为当前（仅 single 模式）/绑定 cookie/重置失效/检测可用性/编辑 key）；具体流程委托 `apiKeyFlows.ts`，展示委托 `apiKeyDisplay.ts` |
+| `commands/apiKeyManagerUi.ts` | ~171 | `showApiKeyManager()` 主入口：**仅渲染主菜单 + 分发动作**（增删/批量导入/设为当前（仅 single 模式）/绑定平台登录凭据/重置失效/检测可用性/编辑 key）；具体流程委托 `apiKeyFlows.ts`，展示委托 `apiKeyDisplay.ts` |
 | `commands/apiKeyDisplay.ts` | ~138 | **key 展示辅助**（2026-09-28 新增，纯函数）：`formatBalanceDetailText`（余额格式化）、`fetchAccountInfo`（TTL 缓存查询）、`buildKeyDetailLine`（单 key 详情行）、`buildKeyQuickPickItems`（key 列表 QuickPick 项）。主界面 / key 选择界面 / 检测二级界面共用，展示逻辑只写一处 |
-| `commands/apiKeyFlows.ts` | ~470 | **key 管理交互流程**（2026-09-28 新增）：`KeyManagerContext` 接口 + `queryBalanceFlow` / `addKeyFlow` / `parseBatchImport` / `batchImportFlow`（`key---cookie---备注;` 单行格式）/ `deleteKeysFlow`（多选 + 循环 + 返回）/ `pickKey` / `checkAvailabilityFlow` / `checkAllAvailabilityFlow` / `showCheckMenu` / `bindCookieFlow` / `editKeyFlow` |
-| `commands/checkUsageCommand.ts` | ~60 | `checkUsageCommand()`：强制刷新套餐用量（绕过 TTL）并弹窗展示三窗口使用率 + 余额；区分未配置 token / 401 失效 / 一般失败三种错误。仅绑定状态栏点击（命令面板隐藏） |
+| `commands/apiKeyFlows.ts` | ~470 | **key 管理交互流程**（2026-09-28 新增）：`KeyManagerContext` 接口 + `queryBalanceFlow` / `addKeyFlow` / `parseBatchImport` / `batchImportFlow`（`key---credential---备注;` 单行格式）/ `deleteKeysFlow`（多选 + 循环 + 返回）/ `pickKey` / `checkAvailabilityFlow` / `checkAllAvailabilityFlow` / `showCheckMenu` / `bindCredentialFlow` / `editKeyFlow` |
+| `commands/checkUsageCommand.ts` | ~60 | `checkUsageCommand()`：强制刷新套餐用量（绕过 TTL）并弹窗展示三窗口使用率 + 余额；区分未绑定凭据 / 401 失效 / 一般失败三种错误。仅绑定状态栏点击（命令面板隐藏） |
 | `core/logger.ts` | ~43 | 日志输出 (LogOutputChannel) |
 | `core/localize.ts` | ~213 | 中英文国际化 |
 | `core/types.ts` | ~94 | `SenseAudioModelItem`, `ModelPreset`, `ModelsResponse`, `RetryConfig` 等类型 |
@@ -652,8 +652,8 @@ test/                                     # 测试脚本（运行前需 npm run 
 | `test/test-transient-retry.mjs` | ~120 | **瞬态错误分类测试**（18 项断言）：500 命中瞬态重试但**不**命中 key 轮换（平台问题不换 key）、429/503 两者都命中（回归）、400/403 都不命中、401/402 仅轮换、失效原因提取；运行前需 `npm run compile` |
 | `test/test-vision-history.mjs` | ~155 | 跨轮视觉历史编解码 + 双 API 转换器闭环测试（源自上游 opencode-go-copilot v1.9.2，含 DeepSeek 空 reasoning_content 回归用例；运行前需 `npm run compile`） |
 | `test/test-anthropic-tool-result-merge.mjs` | ~168 | Anthropic 连续工具结果合并测试（源自上游，issue #87 场景：3 个并行 tool_use 结果合并为单条 user 消息；运行前需 `npm run compile`） |
-| `test/test-cloud-sync-auto-push.mjs` | ~90 | **云同步 payload 去重测试**（16 项断言）：`syncPayloadHasChanged` 的空值/版本/长度/逐字段（value/cookie/label）/顺序分支，以及 `undefined` 与 `""` 等价、`updatedAt` 不参与比较；纯函数无 `vscode` 依赖，运行前需 `npm run compile` |
-| `test/test-cloud-sync-flow.mjs` | ~330 | **云同步 push/pull 集成测试**（22 项断言）：通过 `Module._load` 钩子注入 `vscode` mock + mock `fetch`，驱动真实 `pushToCloud`/`pullFromCloud` 流程——push 新建/PATCH/无变更短路/空 store 警告、**push 记录服务端 `updated_at`（回归：曾记录客户端时间导致 push 后必然多拉一次）**、pull 合并（cookie/label 覆盖 + 可用性保留 + 追加新 key）/静默跳过/缓存 gist 失效回退；运行前需 `npm run compile` |
+| `test/test-cloud-sync-auto-push.mjs` | ~90 | **云同步 payload 去重测试**（18 项断言）：`syncPayloadHasChanged` 的空值/版本/长度/逐字段（value/credential/label）/顺序分支，以及 `undefined` 与 `""` 等价、`updatedAt` 不参与比较、**旧字段名 `cookie` 与 `credential` 等价（向后兼容）**；纯函数无 `vscode` 依赖，运行前需 `npm run compile` |
+| `test/test-cloud-sync-flow.mjs` | ~330 | **云同步 push/pull 集成测试**（22 项断言）：通过 `Module._load` 钩子注入 `vscode` mock + mock `fetch`，驱动真实 `pushToCloud`/`pullFromCloud` 流程——push 新建/PATCH/无变更短路/空 store 警告、**push 记录服务端 `updated_at`（回归：曾记录客户端时间导致 push 后必然多拉一次）**、pull 合并（credential/label 覆盖 + 可用性保留 + 追加新 key）/静默跳过/缓存 gist 失效回退；运行前需 `npm run compile` |
 | `test/test-cloud-sync-e2e.mjs` | ~250 | **云同步真实端到端测试**（16 项断言，`npm run test:e2e`）：用**真实 GitHub Gist API** 驱动生产 `pushToCloud`/`pullFromCloud`，验证 mock 无法覆盖的部分（真实请求体格式/响应结构/`updated_at`/内容往返）。安全设计：创建**专用测试 Gist**（描述带随机后缀）并预置其 id 到 `globalState`，**绝不触碰用户真实同步 Gist**；finally 中删除测试 Gist。凭据从 `GITHUB_TOKEN`/`GH_TOKEN` 或 `gh auth token` 读取，无凭据时 SKIP 退出 0；运行前需 `npm run compile` |
 | `test/test-*.mjs`（其余） | — | 令牌应用 / 封号检测 / 封号轮换 / 模型差异 / Responses 复检 / 视觉能力检查等专项测试 |
 
@@ -680,7 +680,7 @@ test/                                     # 测试脚本（运行前需 npm run 
 ### 4.1b `src/commands/apiKeyManagerUi.ts`
 
 #### `showApiKeyManager(context: vscode.ExtensionContext): Promise<void>`
-多 Key 管理 QuickPick 主流程（`senseaudio.manageApiKeys` 命令）。**仅渲染主菜单 + 分发动作**：构造 `KeyManagerContext`（`secrets` + `getLoginToken`/`setLoginToken`，登录 token 存 `globalState` 的 `senseaudio.loginToken`），循环渲染 key 列表（经 `buildKeyQuickPickItems`，脱敏显示 + 可用性/当前使用/固定使用/cookie 状态/账号余额）与动作项，直到用户取消。动作分发到 `apiKeyFlows.ts`：添加 Key（`addKeyFlow`）、批量导入（`batchImportFlow`）、删除 Key（`pickKey` + 二次确认 + `removeApiKey`）、设为当前使用（仅 single 模式渲染；`pickKey` + `setActiveKey`）、编辑 Key（`pickKey` + `editKeyFlow`）、重置失效状态（`resetExhaustedKeys(secrets, true)`）、检测可用性（`showCheckMenu`）、绑定/更新 Cookie（`pickKey` + `bindCookieFlow`）、清除 Cookie（`pickKey` + `setKeyCookie(secrets, index, undefined)`）。
+多 Key 管理 QuickPick 主流程（`senseaudio.manageApiKeys` 命令）。**仅渲染主菜单 + 分发动作**：构造 `KeyManagerContext`（仅 `secrets`——平台登录凭据随 key 存在 SecretStorage 的 `ApiKeyEntry.credential`，不再单独存 globalState），循环渲染 key 列表（经 `buildKeyQuickPickItems`，脱敏显示 + 可用性/当前使用/固定使用/凭据绑定状态/账号余额）与动作项，直到用户取消。动作分发到 `apiKeyFlows.ts`：添加 Key（`addKeyFlow`）、批量导入（`batchImportFlow`）、删除 Key（`pickKey` + 二次确认 + `removeApiKey`）、设为当前使用（仅 single 模式渲染；`pickKey` + `setActiveKey`）、编辑 Key（`pickKey` + `editKeyFlow`）、重置失效状态（`resetExhaustedKeys(secrets, true)`）、检测可用性（`showCheckMenu`）、绑定/更新平台登录凭据（`pickKey` + `bindCredentialFlow`）、清除平台登录凭据（`pickKey` + `setKeyCredential(secrets, index, undefined)`）。
 
 ---
 
@@ -689,13 +689,13 @@ test/                                     # 测试脚本（运行前需 npm run 
 #### `formatBalanceDetailText(info, minBalance): string`
 格式化账号余额为显示文本：现金余额（充值）+ 代金券可用（赠送，含最早到期日）。图标依据**合计可用余额**（现金 + 代金券）——> `minBalanceCny` 为 `$(coin)`、≤ 为 `$(error)`。
 
-#### `fetchAccountInfo(getLoginToken): Promise<AccountInfo | undefined>`
-查询账号余额（TTL 缓存）。数据源为登录 PASETO token 查 `platform.senseaudio.cn/api/user/self`（`getAccountInfoCached`）。余额按**账号**粒度，所有 key 共享同一份。无 token 或查询失败 → undefined（UI 显示"余额未知"）。
+#### `fetchAccountInfo(store): Promise<AccountInfo | undefined>`
+查询账号余额（TTL 缓存）。数据源为 key 绑定的平台登录凭据（PASETO token）查 `platform.senseaudio.cn/api/user/self`（`getAccountInfoCached`）。余额按**账号**粒度，所有 key 共享同一份凭据（优先当前使用 key，否则第一个绑定了凭据的 key）。无凭据或查询失败 → undefined（UI 显示"余额未知"）。
 
 #### `buildKeyDetailLine(entry, balanceText, options?): string`
-构建单个 key 的详情行（与主界面 `render()` 一致）：可用性状态（`$(check)` 可用 / `$(error)` 不可用 / `$(clock)` 冷却（含剩余秒数）/ `$(question)` 未检测）+ 账号余额 + `$(star)` 当前使用（仅 single 模式）+ `$(pinned)` 固定使用（仅 sticky 模式）+ cookie 绑定状态。主界面、key 选择界面、检测二级界面共用，展示逻辑只写一处。
+构建单个 key 的详情行（与主界面 `render()` 一致）：可用性状态（`$(check)` 可用 / `$(error)` 不可用 / `$(clock)` 冷却（含剩余秒数）/ `$(question)` 未检测）+ 账号余额 + `$(star)` 当前使用（仅 single 模式）+ `$(pinned)` 固定使用（仅 sticky 模式）+ 凭据绑定状态。主界面、key 选择界面、检测二级界面共用，展示逻辑只写一处。
 
-#### `buildKeyQuickPickItems(store, getLoginToken, action): Promise<QuickPickItem[]>`
+#### `buildKeyQuickPickItems(store, action): Promise<QuickPickItem[]>`
 构建 key 列表的 QuickPick 项（label + 详情行）。统一处理：账号余额查询（TTL 缓存）、模式判定（single/sticky 的当前/固定标记）、逐 key 详情行（`buildKeyDetailLine`）。主界面 `render()`、key 选择界面 `pickKey()`、检测二级界面 `showCheckMenu()` 共用。
 
 ---
@@ -703,25 +703,25 @@ test/                                     # 测试脚本（运行前需 npm run 
 ### 4.1b-3 `src/commands/apiKeyFlows.ts`（2026-09-28 新增）
 
 #### `interface KeyManagerContext`
-`{ secrets: vscode.SecretStorage; getLoginToken: () => string | undefined; setLoginToken: (token) => Promise<void> }` — 流程上下文，避免闭包耦合。
+`{ secrets: vscode.SecretStorage }` — 流程上下文。平台登录凭据（PASETO token）随 key 存在 SecretStorage 的 store 中（`ApiKeyEntry.credential`），不再单独存 globalState。
 
 #### `queryBalanceFlow(ctx): Promise<void>`
-查询余额/套餐用量流程（登录 token）。**无 token 时静默返回（不弹输入框——与上游 TokenRhythm 一致，余额显示依赖已配置的 token，未配置时管理界面显示"余额未知"）**；查询失败（token 失效/网络）时提示查看输出通道，不弹输入框。
+查询余额/套餐用量流程（key 绑定的平台登录凭据）。**无凭据时提示先绑定（不弹输入框——与上游 TokenRhythm 一致，余额显示依赖已绑定的凭据，未绑定时管理界面显示"余额未知"）**；查询失败（凭据失效/网络）时提示查看输出通道，不弹输入框。
 
 #### `addKeyFlow(ctx): Promise<boolean>`
-添加单个 key 流程（依次输入 key → cookie → label 三元组）。重复值提示已存在并返回 false。
+添加单个 key 流程（依次输入 key → 凭据 → label 三元组）。重复值提示已存在并返回 false。
 
 #### `batchImportFlow(ctx): Promise<void>`
-批量导入流程：**单行文本输入**，格式 `key---cookie---备注;key---cookie---备注;`（字段可留空，末尾分号可省略）。经 `parseBatchImport` 解析后弹确认框（列出脱敏条目），确认后 `addApiKeys` 一次性写入；已存在的 key 自动更新 cookie（不重复添加）。
+批量导入流程：**单行文本输入**，格式 `key---credential---备注;key---credential---备注;`（字段可留空，末尾分号可省略）。经 `parseBatchImport` 解析后弹确认框（列出脱敏条目），确认后 `addApiKeys` 一次性写入；已存在的 key 自动更新凭据（不重复添加）。
 
-#### `parseBatchImport(text): { value, cookie?, label? }[]`
-解析批量导入文本。按 `;` 分条、按 `---` 分字段（key / cookie / 备注）；空条目与缺 key 的条目跳过；备注中的 `---` 通过 `parts.slice(2).join("---")` 完整保留。纯函数，有 14 项断言测试（`test/test-batch-import.mjs`）。
+#### `parseBatchImport(text): { value, credential?, label? }[]`
+解析批量导入文本。按 `;` 分条、按 `---` 分字段（key / credential / 备注）；空条目与缺 key 的条目跳过；备注中的 `---` 通过 `parts.slice(2).join("---")` 完整保留。纯函数，有 14 项断言测试（`test/test-batch-import.mjs`）。
 
 #### `deleteKeysFlow(ctx): Promise<void>`
 删除 key 流程：**多选 + 循环**。`canPickMany` 一次勾选多个 key；删除后**停留在本界面**并刷新列表（可继续删）；提供「返回」项，按 ESC 或选中「返回」回到主菜单。删除按索引**降序**执行，避免前面的删除导致后面索引偏移。
 
 #### `pickKey(ctx, title): Promise<{ index, entry } | undefined>`
-选择一个 key（删除/设为当前/编辑/绑定/清除 cookie 共用）。复用主界面同款 QuickPick 项（`buildKeyQuickPickItems`），让用户在删除/编辑前能区分各个 key。
+选择一个 key（删除/设为当前/编辑/绑定/清除凭据共用）。复用主界面同款 QuickPick 项（`buildKeyQuickPickItems`），让用户在删除/编辑前能区分各个 key。
 
 #### `checkAvailabilityFlow(ctx, index): Promise<void>`
 检测单个 key 的可用性（`testKeyAvailability` 最小真实聊天请求），并更新其可用状态。402 → 提示"余额不足（≤ 阈值）"；401 → "Key 已失效"；无法确定 → "请稍后重试"。
@@ -732,11 +732,11 @@ test/                                     # 测试脚本（运行前需 npm run 
 #### `showCheckMenu(ctx): Promise<void>`
 检测可用性二级界面：列出全部 key 状态（`buildKeyQuickPickItems`）+ "检测所有" + "查询余额" + "返回"。
 
-#### `bindCookieFlow(ctx, index): Promise<void>`
-绑定/更新 cookie 流程（空输入 = 清除）。
+#### `bindCredentialFlow(ctx, index): Promise<void>`
+绑定/更新平台登录凭据流程（空输入 = 清除）。
 
 #### `editKeyFlow(ctx, index): Promise<void>`
-编辑 key 流程（value / cookie / label 三字段，value 冲突校验）。
+编辑 key 流程（value / credential / label 三字段，value 冲突校验）。平台登录凭据为账号级（查余额/套餐用量用），随 key 一并编辑。
 
 ---
 
@@ -756,7 +756,7 @@ test/                                     # 测试脚本（运行前需 npm run 
 ### 4.1f `src/provider/rotation.ts`
 
 #### `runKeyRotationLoop(params): Promise<void>`
-多 API Key 轮换循环。每轮选一个 key，跳过余额不足（cookie 主动预检）或返回轮换错误（401/402/429/503，状态码与文本 patterns 可配置）的 key。全部 key 用尽时列出脱敏 key + 失败原因；若失败均为瞬态（429/503）则按 `senseaudio.transientRetryTimes` 指数退避重试整轮。**平台侧瞬态错误（500）强制同 key 重试**：`forceKey` 记住当前 key，下一轮强制复用（rotation 模式游标已前移，不强制会静默换 key，违背"500 不换 key"承诺）。**重试计数器按场景分离**：`wholeRoundRetryCount`（全部 key 瞬态失败/无可用 key 整轮重试）与 `sameKeyRetryCount`（500 同 key 重试）独立计数，500 重试不消耗 429/503 整轮配额。single 模式 fallback=switch 时仅在余额不足（402/预检）时切换并经 `setActiveKeyByValue` 设为当前（`onFallbackSwitch` 回调触发通知）。参数：`secrets` / `token` / `abortController` / `execute(apiKey, requestHeaders)` / `customHeaders` / `apiMode` / `onFallbackSwitch`。
+多 API Key 轮换循环。每轮选一个 key，跳过余额不足（凭据主动预检）或返回轮换错误（401/402/429/503，状态码与文本 patterns 可配置）的 key。全部 key 用尽时列出脱敏 key + 失败原因；若失败均为瞬态（429/503）则按 `senseaudio.transientRetryTimes` 指数退避重试整轮。**平台侧瞬态错误（500）强制同 key 重试**：`forceKey` 记住当前 key，下一轮强制复用（rotation 模式游标已前移，不强制会静默换 key，违背"500 不换 key"承诺）。**重试计数器按场景分离**：`wholeRoundRetryCount`（全部 key 瞬态失败/无可用 key 整轮重试）与 `sameKeyRetryCount`（500 同 key 重试）独立计数，500 重试不消耗 429/503 整轮配额。single 模式 fallback=switch 时仅在余额不足（402/预检）时切换并经 `setActiveKeyByValue` 设为当前（`onFallbackSwitch` 回调触发通知）。参数：`secrets` / `token` / `abortController` / `execute(apiKey, requestHeaders)` / `customHeaders` / `apiMode` / `onFallbackSwitch`。
 
 ---
 
@@ -835,16 +835,16 @@ key 轮换失败原因 → 人类可读标签（l10n key）：`balance`/`invalid
 模块级可变状态（独立成文件避免循环依赖）：`STORE_KEY` / `LEGACY_KEY` 常量、`getStoreCache`/`setStoreCache`、`getRotationIndex`/`setRotationIndex`、`getTransientExhaustedMap`。
 
 #### `keys/store.ts`
-`getApiKeyStore`（含旧版单 key 迁移与 JSON 损坏修复）/ `saveApiKeyStore` / `invalidateApiKeyStoreCache` / `addApiKey` / `addApiKeys` / `removeApiKey`（**同步清理被删 key 的瞬态冷却条目**，避免内存残留与同 value 新 key 继承旧冷却）/ `setActiveKey` / `setKeyCookie` / `updateApiKey`。
+`getApiKeyStore`（含旧版单 key 迁移与 JSON 损坏修复；**读取时兼容旧字段名 `cookie`**，自动映射到 `credential`）/ `saveApiKeyStore` / `invalidateApiKeyStoreCache` / `addApiKey` / `addApiKeys` / `removeApiKey`（**同步清理被删 key 的瞬态冷却条目**，避免内存残留与同 value 新 key 继承旧冷却）/ `setActiveKey` / `setKeyCredential` / `updateApiKey`。
 
 #### `keys/selection.ts`
-`getPrimaryApiKey` / `pickNextApiKey`（rotation 前移游标 / sticky 钉住游标）/ `shouldSingleKeyFallbackSwitch` / `setActiveKeyByValue`。
+`getPrimaryApiKey` / `pickNextApiKey`（rotation 前移游标 / sticky 钉住游标）/ `shouldSingleKeyFallbackSwitch` / `setActiveKeyByValue` / `pickAccountCredential`（从 store 选取账号级平台登录凭据：优先当前使用 key，否则第一个绑定了凭据的 key）/ `getAccountCredential`（异步便捷封装）。
 
 #### `keys/health.ts`
 `getTransientExhaustedInfo` / `isApiKeyEligible` / `hasTransientExhaustedKey` / `isKeyRotationError` / `isTransientRetryError` / `isTransientExhaustedReason` / `getKeyRotationReason`（**状态码优先**，文本仅在对应状态码命中时参与判定，避免 429/503 响应体偶然包含"余额不足"时误分类为 balance 并持久化禁用 key；状态码匹配用 `\b` 边界）/ `getKeyUnavailableReason` / `markApiKeyExhausted` / `markApiKeyAvailable` / `updateKeyAvailability` / `resetExhaustedKeys` / `getKeyDisplayStatus`。
 
 #### `keys/mask.ts`
-`maskApiKey` / `maskCookie` 脱敏。
+`maskApiKey` / `maskCredential` 脱敏。
 
 ---
 
@@ -885,7 +885,7 @@ key 轮换失败原因 → 人类可读标签（l10n key）：`balance`/`invalid
 ### 4.1m `src/commands/checkUsageCommand.ts`
 
 #### `checkUsageCommand(context): Promise<void>`
-套餐用量刷新（`senseaudio.checkUsage`）。强制刷新（`refreshPlanUsageNow()` 绕过 TTL）并弹窗展示三窗口使用率 + 余额。错误区分：**无 token 静默返回（不弹输入框/不跳转，状态栏显示 `--`）** / 401 token 失效（提示重新复制）/ 一般失败（提示查看输出通道）。**仅绑定状态栏条目点击**（命令面板隐藏，见 `package.json` 的 `menus.commandPalette`）。
+套餐用量刷新（`senseaudio.checkUsage`）。强制刷新（`refreshPlanUsageNow()` 绕过 TTL）并弹窗展示三窗口使用率 + 余额。错误区分：**无凭据静默返回（不弹输入框/不跳转，状态栏显示 `--`）** / 401 凭据失效（提示重新复制）/ 一般失败（提示查看输出通道）。**仅绑定状态栏条目点击**（命令面板隐藏，见 `package.json` 的 `menus.commandPalette`）。
 
 ---
 
@@ -907,16 +907,16 @@ key 轮换失败原因 → 人类可读标签（l10n key）：`balance`/`invalid
 从 Gist API 响应（PATCH/POST）中读取服务端 `updated_at`，供 push 侧记录 `lastCloudSyncAt`；解析失败返回 undefined（调用方回退本地时间）。
 
 #### `normalizeEntries(keys): SyncedKeyEntry[]`（模块级私有）
-规范化同步条目：过滤空 value，cookie/label 去空白。
+规范化同步条目：过滤空 value，credential/label 去空白（兼容旧字段名 `cookie`）。
 
 #### `buildPayload(keys): SyncPayload`（模块级私有）
-将本地 store 序列化为同步负载（仅 value/cookie/label，可用性状态不同步）。
+将本地 store 序列化为同步负载（仅 value/credential/label，可用性状态不同步）。
 
 #### `pushToCloud(context, silent = false): Promise<void>`
-推送本地 key/cookie/备注 到云端 Gist（`senseaudio.syncPush` 命令）。未登录时在非 silent 模式下弹登录界面；无 key 时警告返回。**push/pull 模块级互斥**（`syncInFlight`，重叠时警告返回，防止 pull 用旧 store 快照覆盖 push 结果）。**自动推送**：`cloudSyncAutoPush` 开启时，用户 key 管理操作触发 `autoPushDebounced()`，2–3 秒去抖后重用此函数；本地 payload 与云端相同则直接短路不写 Gist，不更新 `updatedAt`，避免无变更反复推送。**跨窗口锁**：`globalState` 的 `senseaudio.cloudSyncLockUntil` 防止两个窗口同时写 Gist；自动推送失败仅记录日志不弹窗。Gist 定位：缓存 gist id（PATCH 404 回退）→ 按描述查找 → 创建新 Gist（`public: false`）。**POST 响应解析不出 id 时抛错走 catch 分支**（不更新时间戳、不报成功），避免"假成功"污染 `lastCloudSyncAt`。**`lastCloudSyncAt` 记录服务端时间戳**（`readGistUpdatedAt` 从 PATCH/POST 响应的 `updated_at` 读取，响应缺失时回退本地时间）——与 pull 侧 `fetchSyncPayload` 用服务端时间覆盖 `updatedAt` 的口径一致，消除客户端时钟偏差导致的"push 后下一次启动必然多拉一次"问题。成功后弹窗提示。
+推送本地 key/credential/备注 到云端 Gist（`senseaudio.syncPush` 命令）。未登录时在非 silent 模式下弹登录界面；无 key 时警告返回。**push/pull 模块级互斥**（`syncInFlight`，重叠时警告返回，防止 pull 用旧 store 快照覆盖 push 结果）。**自动推送**：`cloudSyncAutoPush` 开启时，用户 key 管理操作触发 `autoPushDebounced()`，2–3 秒去抖后重用此函数；本地 payload 与云端相同则直接短路不写 Gist，不更新 `updatedAt`，避免无变更反复推送。**跨窗口锁**：`globalState` 的 `senseaudio.cloudSyncLockUntil` 防止两个窗口同时写 Gist；自动推送失败仅记录日志不弹窗。Gist 定位：缓存 gist id（PATCH 404 回退）→ 按描述查找 → 创建新 Gist（`public: false`）。**POST 响应解析不出 id 时抛错走 catch 分支**（不更新时间戳、不报成功），避免"假成功"污染 `lastCloudSyncAt`。**`lastCloudSyncAt` 记录服务端时间戳**（`readGistUpdatedAt` 从 PATCH/POST 响应的 `updated_at` 读取，响应缺失时回退本地时间）——与 pull 侧 `fetchSyncPayload` 用服务端时间覆盖 `updatedAt` 的口径一致，消除客户端时钟偏差导致的"push 后下一次启动必然多拉一次"问题。成功后弹窗提示。
 
 #### `pullFromCloud(context, silent = false): Promise<boolean>`
-从云端 Gist 拉取 key/cookie/备注 覆盖本地（`senseaudio.syncPull` 命令）。**push/pull 模块级互斥**（`syncInFlight`，silent 模式静默返回 false）。合并策略：云端为源——按 key 值对齐，云端条目覆盖本地 cookie/label，云端有本地无的追加、本地有云端无的删除；可用性状态（available/lastCheckedAt）为本地数据按 key 值保留；activeIndex 按 key 值跟随。无变更时不写 store 仅更新同步时间戳。**缓存 gist id 失效回退**：缓存 id 拉取失败（404 等，Gist 在其他机器被删除重建）时清缓存回退 `findSyncGist` 重新查找，避免自动拉取从此每次启动静默失败。**时间戳用 GitHub 服务端时间**：`fetchSyncPayload` 优先取 Gist API 的 `updated_at` 覆盖负载内时间戳，消除客户端时钟偏差导致的漏拉。`silent=true`（启动自动拉取）时：未登录/无 Gist/云端无更新（`updatedAt <= lastSyncAt`）均静默返回 false，拉取成功弹窗提示。
+从云端 Gist 拉取 key/credential/备注 覆盖本地（`senseaudio.syncPull` 命令）。**push/pull 模块级互斥**（`syncInFlight`，silent 模式静默返回 false）。合并策略：云端为源——按 key 值对齐，云端条目覆盖本地 credential/label，云端有本地无的追加、本地有云端无的删除；可用性状态（available/lastCheckedAt）为本地数据按 key 值保留；activeIndex 按 key 值跟随。无变更时不写 store 仅更新同步时间戳。**缓存 gist id 失效回退**：缓存 id 拉取失败（404 等，Gist 在其他机器被删除重建）时清缓存回退 `findSyncGist` 重新查找，避免自动拉取从此每次启动静默失败。**时间戳用 GitHub 服务端时间**：`fetchSyncPayload` 优先取 Gist API 的 `updated_at` 覆盖负载内时间戳，消除客户端时钟偏差导致的漏拉。`silent=true`（启动自动拉取）时：未登录/无 Gist/云端无更新（`updatedAt <= lastSyncAt`）均静默返回 false，拉取成功弹窗提示。
 
 #### `autoPullOnStartup(context): void`
 启动自动拉取入口（fire-and-forget，不阻塞激活）。读取 `senseaudio.cloudSyncAutoPull` 配置（默认开启），关闭则直接返回；未登录 GitHub 时静默跳过不弹登录界面。
@@ -925,7 +925,10 @@ key 轮换失败原因 → 人类可读标签（l10n key）：`balance`/`invalid
 注册 API Key store 变更监听：当 SecretStorage 写入后在 2.5s 去抖触发 `pushToCloud(context, true)`，但会跳过 `suppressAutoPush`（pull 触发的本地写入）以及无效配置状态，避免回环。`flushPendingAutoPush()` 负责在扩展停用前清理未执行定时器。
 
 #### `syncPayloadHasChanged(local, remote): boolean`
-纯函数：比较本地与云端 Gist payload 的 `version`、条目数以及每个 key 的 `value/cookie/label`，相同返回 false，任一差异返回 true。避免在 Node 离线测试中加载 `vscode` 模块，并让云同步去重逻辑与回归测试共享一份实现。
+纯函数：比较本地与云端 Gist payload 的 `version`、条目数以及每个 key 的 `value/credential/label`（经 `readEntryCredential` 读取，兼容旧字段名 `cookie`），相同返回 false，任一差异返回 true。避免在 Node 离线测试中加载 `vscode` 模块，并让云同步去重逻辑与回归测试共享一份实现。
+
+#### `readEntryCredential(entry): string | undefined`
+读取条目的平台登录凭据，兼容旧字段名 `cookie`（旧版 Gist 用 `cookie` 存储凭据，新版用 `credential`）。
 
 ---
 
@@ -1351,8 +1354,8 @@ ask_image 工具定义的 OpenAI 格式（`type: "function"`），包含 `imageI
 
 ### 4.15 `src/ui/statusBar.ts`
 
-#### `initStatusBar(context, getLoginToken?): vscode.StatusBarItem`
-创建状态栏条目并重置累计计数器。主文本初始为 `$(pulse) --`，`command` 设为 `senseaudio.checkUsage`（点击即刷新套餐用量）。传入 `getLoginToken` 时启动套餐用量后台轮询（`startUsagePolling`），并注册配置变化监听（`showUsageInTooltip` / `showUsageInStatusBar` / `usageRefreshInterval` 变化时重启轮询并重渲染）。**启动时不显示**（保持隐藏），仅在用户实际使用本插件模型时才显示。
+#### `initStatusBar(context, getCredential?): vscode.StatusBarItem`
+创建状态栏条目并重置累计计数器。主文本初始为 `$(pulse) --`，`command` 设为 `senseaudio.checkUsage`（点击即刷新套餐用量）。传入 `getCredential`（`() => Promise<string | undefined>`，从 key store 取账号级平台登录凭据）时启动套餐用量后台轮询（`startUsagePolling`），并注册配置变化监听（`showUsageInTooltip` / `showUsageInStatusBar` / `usageRefreshInterval` 变化时重启轮询并重渲染）。**启动时不显示**（保持隐藏），仅在用户实际使用本插件模型时才显示。
 
 #### `showTokenStatusBar(statusBarItem): void`
 显示状态栏并取消待执行的自动隐藏定时器。在 `provideLanguageModelChatResponse` 发起请求时调用。`isStatusBarEnabled()` 为 false（高级 Token 指示器与套餐用量显示均关闭）时直接隐藏。
@@ -1364,7 +1367,7 @@ ask_image 工具定义的 OpenAI 格式（`type: "function"`），包含 `imageI
 调度状态栏自动隐藏（默认空闲 60 秒后隐藏，可被下一次请求取消）。在请求结束（finally）时调用，确保切换其他模型后状态栏不会残留。
 
 #### `refreshPlanUsageNow(): Promise<PlanUsageSnapshot | null>`
-强制立即刷新套餐用量（`senseaudio.checkUsage` 命令与点击状态栏使用）：`getPlanUsageCached(token, true)` 绕过 TTL 强制拉取，完成后重渲染主文本与 tooltip 并返回快照。无登录 token 时返回 null。**并发保护**：后台刷新在途时（`usageRefreshInFlight`）不重复发起，直接返回当前缓存快照（`getPlanUsageSnapshot()`），避免穿透 in-flight 标志形成并发请求。
+强制立即刷新套餐用量（`senseaudio.checkUsage` 命令与点击状态栏使用）：`getPlanUsageCached(token, true)` 绕过 TTL 强制拉取，完成后重渲染主文本与 tooltip 并返回快照。无凭据时返回 null。**并发保护**：后台刷新在途时（`usageRefreshInFlight`）不重复发起，直接返回当前缓存快照（`getPlanUsageSnapshot()`），避免穿透 in-flight 标志形成并发请求。
 
 #### `formatTokenCount(value): string`
 格式化 Token 数为人类可读格式 (K/M/B)。
@@ -1394,7 +1397,7 @@ API 返回用量数据后重渲染状态栏。`showUsageInStatusBar` 开启时**
 将套餐用量区块追加到 tooltip 行数组：配置关闭或无缓存时直接返回；每个窗口一行（`5H——0% (0 / 10,000 积分)`）+ 5h 重置倒计时行 + 余额行 + 计费模式说明行。
 
 #### `refreshPlanUsage(): Promise<void>`（模块级私有）
-后台刷新（fire-and-forget）：无 token 或已有刷新在途时跳过；成功后重渲染主文本与 tooltip。
+后台刷新（fire-and-forget）：无凭据或已有刷新在途时跳过；成功后重渲染主文本与 tooltip。
 
 #### `startUsagePolling() / stopUsagePolling(): void`（模块级私有）
 启动/停止轮询定时器。`startUsagePolling` 先停旧定时器，立即触发一次刷新后按 `usageRefreshInterval`（夹取 1-60 分钟）定时刷新，输出 `planUsage.poll.start`/`planUsage.poll.stop`（debug）。

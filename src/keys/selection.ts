@@ -3,7 +3,7 @@ import { getApiKeyMode } from "./config";
 import { isApiKeyEligible } from "./health";
 import { getRotationIndex, setRotationIndex } from "./state";
 import { getApiKeyStore, saveApiKeyStore } from "./store";
-import type { ApiKeyEntry, ApiKeyMode } from "./types";
+import type { ApiKeyEntry, ApiKeyMode, ApiKeyStore } from "./types";
 
 /**
  * Key 选择逻辑：主 key 获取、轮询/粘性选择、single 模式 fallback 判定。
@@ -116,4 +116,25 @@ export async function setActiveKeyByValue(secrets: vscode.SecretStorage, keyValu
     }
     store.activeIndex = idx;
     await saveApiKeyStore(secrets, store);
+}
+
+/**
+ * 从 store 中选取账号级平台登录凭据（余额/套餐用量查询用）。
+ *
+ * 余额按**账号**粒度，所有 key 共享同一份凭据。优先取当前使用 key 的凭据，
+ * 否则取第一个绑定了凭据的 key。均无凭据时返回 undefined（UI 显示“余额未知”）。
+ */
+export function pickAccountCredential(store: ApiKeyStore): string | undefined {
+    const active = store.keys[store.activeIndex];
+    if (active?.credential) {
+        return active.credential;
+    }
+    return store.keys.find((k) => k.credential)?.credential;
+}
+
+/**
+ * 读取 store 并选取账号级平台登录凭据（异步便捷封装）。
+ */
+export async function getAccountCredential(secrets: vscode.SecretStorage): Promise<string | undefined> {
+    return pickAccountCredential(await getApiKeyStore(secrets));
 }

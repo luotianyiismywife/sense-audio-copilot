@@ -27,7 +27,7 @@
 - **瞬态自动重试**：全部 key 均因瞬态错误（默认 429/500/503，`transientRetryStatusCodes` 可配置）失败时，按 `transientRetryTimes`（默认 3）自动重试整轮——指数退避等待（2s/4s/8s，上限 8s），重试前**清空瞬态冷却**（否则 `pickNextApiKey` 会跳过全部 key 使重试无效），次数用尽才报错。
 - **平台侧错误不换 key**：500 Internal Server Error 是平台问题而非 key 问题——它命中瞬态重试但**不**命中轮换状态码，因此**不标记 key、不换 key**，仅退避后重试同一个 key（日志 `key.transientRetrySameKey`）。
 - **全部 key 不可用报错**：报错列出每个 key 的脱敏 ID + 原因（`buildAllKeysUnavailableDetail`，如 `sk_****abcd: 服务端繁忙 (503)`），区分"瞬态失败请稍后重试"（429/503）与"确定性失败请检测"（402/401）。
-- **余额展示**：管理界面所有 key 列表（主界面 / 检测二级界面 / 删除·设当前·编辑·绑定选择界面）显示账号余额——现金 `$(coin)/$(error) 充值 ¥X.XX` + 代金券 `$(gift) 赠送 ¥Y.YY（至 YYYY-MM-DD）`。数据源为登录 PASETO token 查 `platform.senseaudio.cn/api/user/self`（**按账号粒度**，所有 key 共享），见 `src/balance/accountInfo.ts`。
+- **余额展示**：管理界面所有 key 列表（主界面 / 检测二级界面 / 删除·设当前·编辑·绑定选择界面）显示账号余额——现金 `$(coin)/$(error) 充值 ¥X.XX` + 代金券 `$(gift) 赠送 ¥Y.YY（至 YYYY-MM-DD）`。数据源为 key 绑定的平台登录凭据（PASETO token）查 `platform.senseaudio.cn/api/user/self`（**按账号粒度**，所有 key 共享同一份凭据），见 `src/balance/accountInfo.ts`。
 
 > **为什么没有主动余额预检**：旧平台 cookie 端点 `senseaudio.cn/api/usage-summary` 与 `/api/api-keys`
 > 已于 2026-09-23 实测 **404**（平台改版为三域认证体系）。余额不足改由 API 返回 **402** 触发被动轮换。
@@ -45,7 +45,7 @@
     {
       "value": "sk_xxxx...",          // API Key（必填）
       "label": "工作号",               // 备注（可选）
-      "cookie": "sess_xxxx...",        // tr_session cookie（可选，可多个 key 共享同一值）
+      "credential": "v2.public...",    // 平台登录凭据（PASETO token，可选，可多个 key 共享同一值）
       "available": true,               // 可用性: true=可用 / false=不可用(余额不足或失效) / null=未检测
       "lastCheckedAt": 1723190400000   // 最近一次检测时间戳（可选）
     }
@@ -126,13 +126,14 @@ const transientExhausted = new Map<string, TransientExhausted>();
 | `updateKeyAvailability(secrets, key, available)` | 异步 | 通用状态更新 |
 | `resetExhaustedKeys(secrets, resetPersisted)` | 异步 | 清空瞬态冷却；可选将所有 `available=false` 重置为 `null`（`resetPersisted=true`） |
 | `addApiKey(secrets, entry)` | 异步 | 添加单个 key（校验重复值） |
-| `addApiKeys(secrets, entries)` | 异步 | **批量添加**（三元组 value/cookie/label）；已有重复 key 更新其 cookie（不重复添加），返回 `{added, updated}` |
-| `updateApiKey(secrets, index, fields)` | 异步 | **三字段编辑**（value/cookie/label）；value 冲突校验，返回 `{ok, conflict?}` |
+| `addApiKeys(secrets, entries)` | 异步 | **批量添加**（三元组 value/credential/label）；已有重复 key 更新其 credential（不重复添加），返回 `{added, updated}` |
+| `updateApiKey(secrets, index, fields)` | 异步 | **三字段编辑**（value/credential/label）；value 冲突校验，返回 `{ok, conflict?}` |
 | `removeApiKey(secrets, index)` | 异步 | 删除；调整 activeIndex 与轮询游标；**同步清理该 key 的瞬态冷却条目** |
 | `setActiveKey(secrets, index)` | 异步 | 设置 single 模式的当前 key |
-| `setKeyCookie(secrets, index, cookie?)` | 异步 | 绑定/更新/清除指定 key 的 cookie |
+| `setKeyCredential(secrets, index, credential?)` | 异步 | 绑定/更新/清除指定 key 的平台登录凭据 |
 | `getKeyDisplayStatus(entry)` | 同步 | `available` / `unavailable` / `unknown` / `cooldown`（供 QuickPick UI） |
-| `maskApiKey(key)` / `maskCookie(cookie)` | 同步 | `sk_****abcd` / `sess_****abcd` 脱敏 |
+| `pickAccountCredential(store)` / `getAccountCredential(secrets)` | 同步/异步 | 从 store 选取账号级平台登录凭据（优先当前使用 key，否则第一个绑定了凭据的 key） |
+| `maskApiKey(key)` / `maskCredential(credential)` | 同步 | `sk_****abcd` / `v2.pu****abcd` 脱敏 |
 
 ### 3.2 `pickNextApiKey` 选择逻辑
 
@@ -165,7 +166,7 @@ pickNextApiKey(secrets, mode):
 
 | 函数 | 签名 | 职责 |
 |------|------|------|
-| `queryAccountInfo(loginToken)` | `(token) => Promise<AccountInfo>` | `GET platform.senseaudio.cn/api/user/self`，Bearer PASETO token + `x-platform`/`x-product` 必需头；返回 `usage_infos[]` + `account_info`（balance/vouchers/enable_extra_usage） |
+| `queryAccountInfo(loginToken)` | `(token) => Promise<AccountInfo>` | `GET platform.senseaudio.cn/api/user/self`，Bearer 平台登录凭据（PASETO token，取自 key store 的 `ApiKeyEntry.credential`）+ `x-platform`/`x-product` 必需头；返回 `usage_infos[]` + `account_info`（balance/vouchers/enable_extra_usage） |
 | `getAccountInfoWithStatus(token, ttlSec, force?)` | 异步 | 带状态返回：`ok` / `unauthorized`（401）/ `error`，供状态栏与命令区分 401 |
 | `getAccountInfoCached(token, ttlSec)` | 异步 | TTL 缓存；失败返回 undefined（UI 显示"余额未知"） |
 | `formatExpiryDate(epochSec)` | 同步 | 格式化代金券到期日为 `YYYY-MM-DD`（本地时区）；无到期/非法返回空串 |
@@ -306,16 +307,16 @@ while (true):
 | # | 情况 | 处理 | 覆盖 |
 |---|------|------|------|
 | H1 | 空列表 | 仅显示"添加 Key"动作 | ✅ |
-| H2 | 添加 key | 输入 key（可附带 label、cookie）；重复值提示已存在 | ✅ |
-| H2b | **批量导入** | 单行文本输入，格式 `key---cookie---备注;key---cookie---备注;`（字段可留空，末尾分号可省略）；`parseBatchImport` 解析后弹确认框（脱敏预览），确认后 `addApiKeys` 一次性写入；已存在 key 自动更新 cookie 不重复添加 | ✅ |
-| H2c | **编辑 key** | `editKeyFlow` 三字段（value/cookie/label）编辑，value 冲突校验 | ✅ |
+| H2 | 添加 key | 输入 key（可附带 label、平台登录凭据）；重复值提示已存在 | ✅ |
+| H2b | **批量导入** | 单行文本输入，格式 `key---credential---备注;key---credential---备注;`（字段可留空，末尾分号可省略）；`parseBatchImport` 解析后弹确认框（脱敏预览），确认后 `addApiKeys` 一次性写入；已存在 key 自动更新凭据不重复添加 | ✅ |
+| H2c | **编辑 key** | `editKeyFlow` 三字段（value/credential/label）编辑，value 冲突校验 | ✅ |
 | H3 | 删除 key | **多选 + 循环**：`canPickMany` 一次勾选多个；删除后停留在本界面并刷新列表；提供「返回」项，ESC 或选中「返回」回主菜单；按索引降序删除避免偏移 | ✅ |
 | H4 | 设为当前使用 | 更新 activeIndex（**仅 single 模式渲染/显示；rotation/sticky 模式隐藏**） | ✅ |
-| H5 | 绑定/更新 cookie | 选择 key → 输入 cookie | ✅ |
-| H6 | 清除 cookie | 置空 | ✅ |
+| H5 | 绑定/更新平台登录凭据 | 选择 key → 输入凭据 | ✅ |
+| H6 | 清除平台登录凭据 | 置空 | ✅ |
 | H7 | 重置失效状态 | 清瞬态冷却 + 所有 `available=false` → `null` | ✅ |
 | H8 | 检测可用性 | 见 4.5 矩阵；检测二级界面（`showCheckMenu`）列出全部 key 状态 + "检测所有" | ✅ |
-| H9 | 状态显示 | `$(check) 可用` / `$(error) 不可用` / `$(question) 未检测` / `$(clock) 冷却(Ns)` / `$(star) 当前使用`（仅 single）/ `$(pinned) 固定使用`（仅 sticky）/ `$(key) cookie 已绑定` | ✅ |
+| H9 | 状态显示 | `$(check) 可用` / `$(error) 不可用` / `$(question) 未检测` / `$(clock) 冷却(Ns)` / `$(star) 当前使用`（仅 single）/ `$(pinned) 固定使用`（仅 sticky）/ `$(key) 凭据已绑定` | ✅ |
 | H9b | **余额显示** | 主界面/检测二级界面/删除·设当前·编辑·绑定选择界面均显示账号余额：`$(coin)/$(error) 充值 ¥X.XX` + `$(gift) 赠送 ¥Y.YY（至 YYYY-MM-DD）`（`getAccountInfoCached` TTL 缓存）；查询失败 `$(warning) 余额未知` | ✅ |
 | H9c | **展示逻辑单一来源** | 三处界面共用 `buildKeyQuickPickItems`（`commands/apiKeyDisplay.ts`），详情行由 `buildKeyDetailLine` 统一构建 | ✅ |
 | H10 | 重复添加同一 key 值 | 提示已存在，不添加 | ✅ |

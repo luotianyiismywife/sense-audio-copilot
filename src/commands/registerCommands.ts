@@ -26,7 +26,7 @@ export function registerCommands(
     );
 
     // Multi-key management command: QuickPick to add/delete keys, set current,
-    // bind cookies, reset exhausted states, and manually test availability.
+    // bind credentials, reset exhausted states, and manually test availability.
     // Also the provider's managementCommand (gear icon next to the provider).
     context.subscriptions.push(
         vscode.commands.registerCommand("senseaudio.manageApiKeys", async () => {
@@ -51,7 +51,7 @@ export function registerCommands(
         })
     );
 
-    // Cloud sync commands: push/pull key/cookie/label triples to a private
+    // Cloud sync commands: push/pull key/credential/label triples to a private
     // GitHub Gist via VS Code's built-in GitHub sign-in.
     context.subscriptions.push(
         vscode.commands.registerCommand("senseaudio.syncPush", async () => {

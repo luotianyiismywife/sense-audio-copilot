@@ -4,7 +4,7 @@
  * 覆盖 `pushToCloud` / `pullFromCloud` 的真实流程（非纯函数）：
  * - push 新建 Gist / PATCH 已有 Gist / 无变更短路 / 空 store 警告
  * - push 记录**服务端** updated_at（回归：曾记录客户端时间导致 push 后必然多拉一次）
- * - pull 合并云端到本地（cookie/label 覆盖、可用性保留、追加新 key）
+ * - pull 合并云端到本地（credential/label 覆盖、可用性保留、追加新 key）
  * - pull 静默跳过（云端不新）/ 缓存 gist 失效回退查找
  *
  * 运行前需 `npm run compile`（依赖 out/ 编译产物）。
@@ -169,7 +169,7 @@ console.log("pushToCloud");
 // A. 无缓存 gist id、无既有 gist → 新建 Gist，记录服务端时间戳
 {
     reset();
-    const ctx = makeContext([{ value: "sk_a", cookie: "c_a", label: "A", available: null }]);
+    const ctx = makeContext([{ value: "sk_a", credential: "c_a", label: "A", available: null }]);
     fetchHandler = (url, method) => {
         if (method === "GET" && url.includes("/gists?")) {
             return jsonResponse([]);
@@ -215,14 +215,14 @@ console.log("pushToCloud");
 // C. 本地与云端一致 → 短路，不写 Gist、不更新时间戳
 {
     reset();
-    const ctx = makeContext([{ value: "sk_a", cookie: "c_a", label: "A", available: null }], {
+    const ctx = makeContext([{ value: "sk_a", credential: "c_a", label: "A", available: null }], {
         [GIST_ID_KEY]: "gist_x",
         [LAST_SYNC_KEY]: "2026-10-01T00:00:00Z",
     });
     const remote = {
         version: 1,
         updatedAt: "2026-10-07T00:00:00Z",
-        keys: [{ value: "sk_a", cookie: "c_a", label: "A" }],
+        keys: [{ value: "sk_a", credential: "c_a", label: "A" }],
     };
     fetchHandler = (url, method) => {
         if (method === "GET" && url.endsWith("/gists/gist_x")) {
@@ -253,18 +253,18 @@ console.log("pushToCloud");
 
 console.log("pullFromCloud");
 
-// E. 云端为源：cookie/label 覆盖、可用性保留、追加新 key
+// E. 云端为源：credential/label 覆盖、可用性保留、追加新 key
 {
     reset();
     const ctx = makeContext(
-        [{ value: "sk_local", cookie: "c_local", label: "L", available: true, lastCheckedAt: 111 }],
+        [{ value: "sk_local", credential: "c_local", label: "L", available: true, lastCheckedAt: 111 }],
         { [GIST_ID_KEY]: "gist_x" },
     );
     const remote = {
         version: 1,
         updatedAt: "2026-10-07T10:00:00Z",
         keys: [
-            { value: "sk_local", cookie: "c_cloud", label: "C" },
+            { value: "sk_local", credential: "c_cloud", label: "C" },
             { value: "sk_new" },
         ],
     };
@@ -277,7 +277,7 @@ console.log("pullFromCloud");
     const changed = await pullFromCloud(ctx, false);
     const saved = JSON.parse(ctx._secretsData.get(STORE_KEY));
     check("合并：返回 true", changed, true);
-    check("合并：云端 cookie 覆盖本地", saved.keys[0].cookie, "c_cloud");
+    check("合并：云端 credential 覆盖本地", saved.keys[0].credential, "c_cloud");
     check("合并：云端 label 覆盖本地", saved.keys[0].label, "C");
     check("合并：本地可用性状态保留", saved.keys[0].available, true);
     check("合并：本地 lastCheckedAt 保留", saved.keys[0].lastCheckedAt, 111);

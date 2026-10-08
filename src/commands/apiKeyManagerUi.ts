@@ -2,7 +2,7 @@
  * apiKeyManagerUi.ts — API Key 管理 QuickPick 主入口。
  *
  * 支持：添加 / 批量导入 / 删除 / 设为当前使用 / 编辑 / 重置失效状态 /
- * 绑定或清除 cookie / 检测可用性 / 查询余额。所有 key 与 cookie 均以脱敏形式展示。
+ * 绑定或清除平台登录凭据 / 检测可用性 / 查询余额。所有 key 与凭据均以脱敏形式展示。
  *
  * 本文件只负责**渲染主菜单 + 分发动作**；展示辅助见 `apiKeyDisplay.ts`，
  * 各交互流程见 `apiKeyFlows.ts`。
@@ -14,13 +14,13 @@ import {
     getApiKeyStore,
     resetExhaustedKeys,
     setActiveKey,
-    setKeyCookie,
+    setKeyCredential,
 } from "../keys/keyManager";
 import { buildKeyQuickPickItems } from "./apiKeyDisplay";
 import {
     addKeyFlow,
     batchImportFlow,
-    bindCookieFlow,
+    bindCredentialFlow,
     deleteKeysFlow,
     editKeyFlow,
     pickKey,
@@ -35,14 +35,10 @@ import {
  * 各流程函数。
  */
 export async function showApiKeyManager(context: vscode.ExtensionContext): Promise<void> {
-    // 登录 PASETO token（60 天有效，查余额/套餐用量用）。
-    // 存在 globalState（非 SecretStorage——token 本身是短期凭证，且需跨窗口共享）。
+    // 平台登录凭据（PASETO token）随 key 一起存在 SecretStorage 的 store 中
+    // （`ApiKeyEntry.credential`），不再单独存 globalState。
     const ctx: KeyManagerContext = {
         secrets: context.secrets,
-        getLoginToken: () => context.globalState.get<string>("senseaudio.loginToken"),
-        setLoginToken: async (token) => {
-            await context.globalState.update("senseaudio.loginToken", token);
-        },
     };
 
     const render = async (): Promise<vscode.QuickPickItem[] | undefined> => {
@@ -55,7 +51,7 @@ export async function showApiKeyManager(context: vscode.ExtensionContext): Promi
         if (store.keys.length === 0) {
             items.push({ label: l10n("No API keys configured"), kind: vscode.QuickPickItemKind.Separator });
         } else {
-            items.push(...(await buildKeyQuickPickItems(store, ctx.getLoginToken, "select")));
+            items.push(...(await buildKeyQuickPickItems(store, "select")));
         }
 
         items.push({ label: "", kind: vscode.QuickPickItemKind.Separator });
@@ -70,8 +66,8 @@ export async function showApiKeyManager(context: vscode.ExtensionContext): Promi
             items.push({ label: `$(edit) ${l10n("Edit API Key")}`, action: "edit" });
             items.push({ label: `$(refresh) ${l10n("Reset Exhausted States")}`, action: "reset" });
             items.push({ label: `$(beaker) ${l10n("Check Availability")}`, action: "check" });
-            items.push({ label: `$(link) ${l10n("Bind/Update Cookie")}`, action: "bindCookie" });
-            items.push({ label: `$(unlink) ${l10n("Clear Cookie")}`, action: "clearCookie" });
+            items.push({ label: `$(link) ${l10n("Bind/Update Credential")}`, action: "bindCredential" });
+            items.push({ label: `$(unlink) ${l10n("Clear Credential")}`, action: "clearCredential" });
         }
         return items;
     };
@@ -142,21 +138,21 @@ export async function showApiKeyManager(context: vscode.ExtensionContext): Promi
                 await showCheckMenu(ctx);
                 break;
             }
-            case "bindCookie": {
-                const keyPick = await pickKey(ctx, l10n("Bind/Update Cookie"));
+            case "bindCredential": {
+                const keyPick = await pickKey(ctx, l10n("Bind/Update Credential"));
                 if (!keyPick) {
                     break;
                 }
-                await bindCookieFlow(ctx, keyPick.index);
+                await bindCredentialFlow(ctx, keyPick.index);
                 break;
             }
-            case "clearCookie": {
-                const keyPick = await pickKey(ctx, l10n("Clear Cookie"));
+            case "clearCredential": {
+                const keyPick = await pickKey(ctx, l10n("Clear Credential"));
                 if (!keyPick) {
                     break;
                 }
-                await setKeyCookie(ctx.secrets, keyPick.index, undefined);
-                vscode.window.showInformationMessage(l10n("Cookie cleared"));
+                await setKeyCredential(ctx.secrets, keyPick.index, undefined);
+                vscode.window.showInformationMessage(l10n("Credential cleared"));
                 break;
             }
             default:

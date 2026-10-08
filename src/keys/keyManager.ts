@@ -32,7 +32,7 @@ export {
     addApiKeys,
     removeApiKey,
     setActiveKey,
-    setKeyCookie,
+    setKeyCredential,
     updateApiKey,
 } from "./store";
 
@@ -41,6 +41,8 @@ export {
     pickNextApiKey,
     shouldSingleKeyFallbackSwitch,
     setActiveKeyByValue,
+    pickAccountCredential,
+    getAccountCredential,
 } from "./selection";
 
 export {
@@ -59,4 +61,4 @@ export {
     getKeyDisplayStatus,
 } from "./health";
 
-export { maskApiKey, maskCookie } from "./mask";
+export { maskApiKey, maskCredential } from "./mask";

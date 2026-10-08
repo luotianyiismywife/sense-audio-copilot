@@ -141,7 +141,7 @@ src/commands/checkUsageCommand.ts  # senseaudio.checkUsage 命令（仅状态栏
 ### 4.1 数据流
 
 ```
-initStatusBar(context, getLoginToken)
+initStatusBar(context, getCredential)
   └── startUsagePolling()                    ← 立即刷新一次 + 定时器
         └── refreshPlanUsage()
               └── getPlanUsageCached(token)  ← TTL 缓存（默认 60s）

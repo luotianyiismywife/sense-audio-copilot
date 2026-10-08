@@ -11,9 +11,10 @@ import {
     addApiKeys,
     getApiKeyStore,
     maskApiKey,
-    maskCookie,
+    maskCredential,
+    pickAccountCredential,
     removeApiKey,
-    setKeyCookie,
+    setKeyCredential,
     updateApiKey,
     updateKeyAvailability,
     type ApiKeyEntry,
@@ -27,33 +28,32 @@ import {
 import { buildKeyQuickPickItems } from "./apiKeyDisplay";
 
 /**
- * 流程上下文：SecretStorage + 登录 PASETO token 读写。
+ * 流程上下文：SecretStorage。
  *
- * 登录 token 存在 `globalState`（非 SecretStorage——token 本身是短期凭证，
- * 且需跨窗口共享），键名 `senseaudio.loginToken`。
+ * 平台登录凭据（PASETO token）随 key 一起存在 SecretStorage 的 store 中
+ * （`ApiKeyEntry.credential`），不再单独存 globalState。
  */
 export interface KeyManagerContext {
     secrets: vscode.SecretStorage;
-    getLoginToken: () => string | undefined;
-    setLoginToken: (token: string | undefined) => Promise<void>;
 }
 
 /**
- * 查询余额/套餐用量流程（登录 token）。
+ * 查询余额/套餐用量流程（key 绑定的平台登录凭据）。
  *
- * 无 token 时静默返回（不弹输入框——与上游 TokenRhythm 一致，余额显示
- * 依赖已配置的 token，未配置时管理界面显示"余额未知"）；查询失败
- * （token 失效/网络）时提示查看输出通道，不弹输入框。
+ * 无凭据时提示先绑定（不弹输入框——与上游 TokenRhythm 一致，余额显示
+ * 依赖已绑定的凭据，未绑定时管理界面显示"余额未知"）；查询失败
+ * （凭据失效/网络）时提示查看输出通道，不弹输入框。
  */
 export async function queryBalanceFlow(ctx: KeyManagerContext): Promise<void> {
-    const token = ctx.getLoginToken();
-    if (!token) {
-        vscode.window.showWarningMessage(l10n("No login token configured. Balance display is unavailable."));
+    const store = await getApiKeyStore(ctx.secrets);
+    const credential = pickAccountCredential(store);
+    if (!credential) {
+        vscode.window.showWarningMessage(l10n("No platform login credential bound. Bind one via Bind/Update Credential."));
         return;
     }
     const info = await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: l10n("Querying balance...") },
-        () => getAccountInfoCached(token, getBalanceCheckIntervalSec()),
+        () => getAccountInfoCached(credential, getBalanceCheckIntervalSec()),
     );
     if (!info) {
         // 查询失败（token 失效/网络）→ 提示查看输出通道，不弹输入框
@@ -68,7 +68,7 @@ export async function queryBalanceFlow(ctx: KeyManagerContext): Promise<void> {
 }
 
 /**
- * 添加单个 key 流程（依次输入 key → cookie → label 三元组）。
+ * 添加单个 key 流程（依次输入 key → 凭据 → label 三元组）。
  * @returns 是否成功添加。
  */
 export async function addKeyFlow(ctx: KeyManagerContext): Promise<boolean> {
@@ -82,10 +82,10 @@ export async function addKeyFlow(ctx: KeyManagerContext): Promise<boolean> {
         return false;
     }
     const trimmed = keyValue.trim();
-    // Unified triple order: key → cookie → label (matches batch import & edit).
-    const cookie = await vscode.window.showInputBox({
+    // Unified triple order: key → credential → label (matches batch import & edit).
+    const credential = await vscode.window.showInputBox({
         title: l10n("Add API Key"),
-        prompt: l10n("Enter the tr_session cookie for this key (optional)"),
+        prompt: l10n("Enter the platform login credential for this key (optional)"),
         ignoreFocusOut: true,
         password: true,
     });
@@ -97,7 +97,7 @@ export async function addKeyFlow(ctx: KeyManagerContext): Promise<boolean> {
     const added = await addApiKey(ctx.secrets, {
         value: trimmed,
         label: label?.trim() || undefined,
-        cookie: cookie?.trim() || undefined,
+        credential: credential?.trim() || undefined,
         available: null,
     });
     if (!added) {
@@ -111,17 +111,17 @@ export async function addKeyFlow(ctx: KeyManagerContext): Promise<boolean> {
 /**
  * 解析批量导入文本。
  *
- * 格式：`key---cookie---备注;key---cookie---备注;`
+ * 格式：`key---credential---备注;key---credential---备注;`
  * - 条目之间用 `;` 分隔（末尾分号可省略）
- * - 每条内三个字段用 `---` 分隔，顺序固定为 key / cookie / 备注
- * - 字段可留空（如 `sk_xxx------备用` 表示无 cookie）
+ * - 每条内三个字段用 `---` 分隔，顺序固定为 key / credential / 备注
+ * - 字段可留空（如 `sk_xxx------备用` 表示无凭据）
  * - 备注中若含 `---`，会被完整保留（只按前两个分隔符切分）
  * - 空条目、缺 key 的条目会被跳过
  *
  * @returns 解析出的三元组数组（可能为空）。
  */
-export function parseBatchImport(text: string): { value: string; cookie?: string; label?: string }[] {
-    const out: { value: string; cookie?: string; label?: string }[] = [];
+export function parseBatchImport(text: string): { value: string; credential?: string; label?: string }[] {
+    const out: { value: string; credential?: string; label?: string }[] = [];
     for (const raw of text.split(";")) {
         const seg = raw.trim();
         if (!seg) {
@@ -132,25 +132,25 @@ export function parseBatchImport(text: string): { value: string; cookie?: string
         if (!value) {
             continue;
         }
-        const cookie = (parts[1] ?? "").trim() || undefined;
+        const credential = (parts[1] ?? "").trim() || undefined;
         // Re-join the remainder so a label containing "---" survives intact.
         const label = parts.slice(2).join("---").trim() || undefined;
-        out.push({ value, cookie, label });
+        out.push({ value, credential, label });
     }
     return out;
 }
 
 /**
- * 批量导入流程：单行文本输入，格式 `key---cookie---备注;key---cookie---备注;`。
+ * 批量导入流程：单行文本输入，格式 `key---credential---备注;key---credential---备注;`。
  *
  * 解析后先弹确认框（列出脱敏条目），确认后 `addApiKeys` 一次性写入；
- * 已存在的 key 自动更新 cookie（不重复添加）。
+ * 已存在的 key 自动更新凭据（不重复添加）。
  */
 export async function batchImportFlow(ctx: KeyManagerContext): Promise<void> {
     const input = await vscode.window.showInputBox({
         title: l10n("Import API Keys (batch)"),
-        prompt: l10n("Format: key---cookie---label;key---cookie---label; (leave a field empty if unused)"),
-        placeHolder: "sk_xxx---sess_yyy---work;sk_zzz------backup;",
+        prompt: l10n("Format: key---credential---label;key---credential---label; (leave a field empty if unused)"),
+        placeHolder: "sk_xxx---v2.public.xxx---work;sk_zzz------backup;",
         ignoreFocusOut: true,
     });
     if (input === undefined || !input.trim()) {
@@ -165,7 +165,7 @@ export async function batchImportFlow(ctx: KeyManagerContext): Promise<void> {
 
     // Confirmation preview (masked) so a malformed paste is caught before writing.
     const preview = entries
-        .map((e) => `${maskApiKey(e.value)}${e.label ? ` (${e.label})` : ""}${e.cookie ? `  $(key) ${maskCookie(e.cookie)}` : ""}`)
+        .map((e) => `${maskApiKey(e.value)}${e.label ? ` (${e.label})` : ""}${e.credential ? `  $(key) ${maskCredential(e.credential)}` : ""}`)
         .join("\n");
     const confirm = await vscode.window.showWarningMessage(
         l10nFormat("Import {0} API key(s)?", String(entries.length)),
@@ -179,10 +179,10 @@ export async function batchImportFlow(ctx: KeyManagerContext): Promise<void> {
     const { added, updated } = await addApiKeys(ctx.secrets, entries);
     if (added > 0 || updated > 0) {
         vscode.window.showInformationMessage(
-            l10nFormat("Imported {0} API keys ({1} cookies updated)", String(added), String(updated))
+            l10nFormat("Imported {0} API keys ({1} credentials updated)", String(added), String(updated))
         );
     } else {
-        vscode.window.showInformationMessage(l10n("No changes (keys already exist with same cookies)"));
+        vscode.window.showInformationMessage(l10n("No changes (keys already exist with same credentials)"));
     }
 }
 
@@ -201,7 +201,7 @@ export async function deleteKeysFlow(ctx: KeyManagerContext): Promise<void> {
             return;
         }
         const items: (vscode.QuickPickItem & { action?: string; index?: number })[] = [
-            ...(await buildKeyQuickPickItems(store, ctx.getLoginToken, "delete")),
+            ...(await buildKeyQuickPickItems(store, "delete")),
             { label: "", kind: vscode.QuickPickItemKind.Separator },
             { label: `$(arrow-left) ${l10n("Back")}`, action: "back" },
         ];
@@ -248,9 +248,9 @@ export async function deleteKeysFlow(ctx: KeyManagerContext): Promise<void> {
 }
 
 /**
- * 选择一个 key（删除/设为当前/编辑/绑定/清除 cookie 共用）。
+ * 选择一个 key（删除/设为当前/编辑/绑定/清除凭据共用）。
  *
- * 复用主界面同款 QuickPick 项（可用性状态 + 余额 + 当前/固定标记 + cookie 绑定），
+ * 复用主界面同款 QuickPick 项（可用性状态 + 余额 + 当前/固定标记 + 凭据绑定），
  * 让用户在删除/编辑前能区分各个 key。
  */
 export async function pickKey(
@@ -263,7 +263,7 @@ export async function pickKey(
         return undefined;
     }
     const picked = await vscode.window.showQuickPick(
-        await buildKeyQuickPickItems(store, ctx.getLoginToken, "select"),
+        await buildKeyQuickPickItems(store, "select"),
         { title, ignoreFocusOut: true }
     );
     if (!picked) {
@@ -355,8 +355,8 @@ export async function showCheckMenu(ctx: KeyManagerContext): Promise<void> {
         const items: (vscode.QuickPickItem & { action?: string; index?: number })[] = [];
 
         // List all keys with their current status (same detail line as the
-        // main interface: availability + cooldown countdown + balance + cookie).
-        items.push(...(await buildKeyQuickPickItems(store, ctx.getLoginToken, "checkOne")));
+        // main interface: availability + cooldown countdown + balance + credential).
+        items.push(...(await buildKeyQuickPickItems(store, "checkOne")));
 
         items.push({ label: "", kind: vscode.QuickPickItemKind.Separator });
         items.push({ label: `$(beaker) ${l10n("Check All Availability")}`, action: "checkAll" });
@@ -391,30 +391,31 @@ export async function showCheckMenu(ctx: KeyManagerContext): Promise<void> {
 }
 
 /**
- * 绑定/更新 cookie 流程（空输入 = 清除）。
+ * 绑定/更新平台登录凭据流程（空输入 = 清除）。
  */
-export async function bindCookieFlow(ctx: KeyManagerContext, index: number): Promise<void> {
+export async function bindCredentialFlow(ctx: KeyManagerContext, index: number): Promise<void> {
     const store = await getApiKeyStore(ctx.secrets);
     const entry = store.keys[index];
     if (!entry) {
         return;
     }
-    const cookie = await vscode.window.showInputBox({
-        title: l10n("Bind/Update Cookie"),
-        prompt: l10n("Enter the tr_session cookie value for this key"),
+    const credential = await vscode.window.showInputBox({
+        title: l10n("Bind/Update Credential"),
+        prompt: l10n("Enter the platform login credential (PASETO token) for this key"),
         ignoreFocusOut: true,
         password: true,
-        value: entry.cookie ?? "",
+        value: entry.credential ?? "",
     });
-    if (cookie === undefined) {
+    if (credential === undefined) {
         return;
     }
-    await setKeyCookie(ctx.secrets, index, cookie.trim() || undefined);
-    vscode.window.showInformationMessage(cookie.trim() ? l10n("Cookie updated") : l10n("Cookie cleared"));
+    await setKeyCredential(ctx.secrets, index, credential.trim() || undefined);
+    vscode.window.showInformationMessage(credential.trim() ? l10n("Credential updated") : l10n("Credential cleared"));
 }
 
 /**
- * 编辑 key 流程（value / cookie / label 三字段，冲突校验）。
+ * 编辑 key 流程（value / credential / label 三字段，冲突校验）。
+ * 平台登录凭据为账号级（查余额/套餐用量用），随 key 一并编辑。
  */
 export async function editKeyFlow(ctx: KeyManagerContext, index: number): Promise<void> {
     const store = await getApiKeyStore(ctx.secrets);
@@ -435,15 +436,15 @@ export async function editKeyFlow(ctx: KeyManagerContext, index: number): Promis
         return;
     }
 
-    // 2. Cookie
-    const newCookie = await vscode.window.showInputBox({
+    // 2. Platform login credential
+    const newCredential = await vscode.window.showInputBox({
         title: l10n("Edit API Key"),
-        prompt: l10n("Edit the tr_session cookie (empty to clear)"),
+        prompt: l10n("Edit the platform login credential (PASETO token; empty to clear)"),
         ignoreFocusOut: true,
         password: true,
-        value: entry.cookie ?? "",
+        value: entry.credential ?? "",
     });
-    if (newCookie === undefined) {
+    if (newCredential === undefined) {
         return;
     }
 
@@ -460,7 +461,7 @@ export async function editKeyFlow(ctx: KeyManagerContext, index: number): Promis
 
     const result = await updateApiKey(ctx.secrets, index, {
         value: newValue.trim(),
-        cookie: newCookie.trim(),
+        credential: newCredential.trim(),
         label: newLabel.trim(),
     });
     if (result.ok) {

@@ -5,8 +5,8 @@ import { syncPayloadHasChanged } from "../out/cloud/syncPayload.js";
 const mk = (keys, updatedAt = "2026-10-07T00:00:00.000Z") => ({ version: 1, updatedAt, keys });
 
 const base = mk([
-    { value: "sk_test_1", cookie: "cookie_1", label: "alpha" },
-    { value: "sk_test_2", cookie: "cookie_2", label: "beta" },
+    { value: "sk_test_1", credential: "cred_1", label: "alpha" },
+    { value: "sk_test_2", credential: "cred_2", label: "beta" },
 ]);
 
 let passed = 0;
@@ -52,8 +52,8 @@ check(
     true,
 );
 check(
-    "cookie 变化 → 推送",
-    syncPayloadHasChanged(base, mk([{ ...base.keys[0], cookie: "cookie_1b" }, base.keys[1]])),
+    "credential 变化 → 推送",
+    syncPayloadHasChanged(base, mk([{ ...base.keys[0], credential: "cred_1b" }, base.keys[1]])),
     true,
 );
 check(
@@ -64,26 +64,44 @@ check(
 
 // --- undefined 与空串等价（与 normalizeEntries 口径一致）---
 check(
-    "cookie undefined vs \"\" → 不推送",
+    "credential undefined vs \"\" → 不推送",
     syncPayloadHasChanged(
         mk([{ value: "sk_test_1", label: "alpha" }]),
-        mk([{ value: "sk_test_1", cookie: "", label: "alpha" }]),
+        mk([{ value: "sk_test_1", credential: "", label: "alpha" }]),
     ),
     false,
 );
 check(
     "label undefined vs \"\" → 不推送",
     syncPayloadHasChanged(
-        mk([{ value: "sk_test_1", cookie: "cookie_1" }]),
-        mk([{ value: "sk_test_1", cookie: "cookie_1", label: "" }]),
+        mk([{ value: "sk_test_1", credential: "cred_1" }]),
+        mk([{ value: "sk_test_1", credential: "cred_1", label: "" }]),
     ),
     false,
 );
 check(
-    "cookie 从有到无 → 推送",
+    "credential 从有到无 → 推送",
     syncPayloadHasChanged(
-        mk([{ value: "sk_test_1", cookie: "cookie_1" }]),
+        mk([{ value: "sk_test_1", credential: "cred_1" }]),
         mk([{ value: "sk_test_1" }]),
+    ),
+    true,
+);
+
+// --- 向后兼容：旧字段名 cookie 与 credential 等价 ---
+check(
+    "旧 cookie 字段 vs 新 credential 字段（同值）→ 不推送",
+    syncPayloadHasChanged(
+        mk([{ value: "sk_test_1", cookie: "cred_1" }]),
+        mk([{ value: "sk_test_1", credential: "cred_1" }]),
+    ),
+    false,
+);
+check(
+    "旧 cookie 字段 vs 新 credential 字段（异值）→ 推送",
+    syncPayloadHasChanged(
+        mk([{ value: "sk_test_1", cookie: "cred_old" }]),
+        mk([{ value: "sk_test_1", credential: "cred_new" }]),
     ),
     true,
 );

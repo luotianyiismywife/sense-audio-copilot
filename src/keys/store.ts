@@ -38,7 +38,8 @@ export async function getApiKeyStore(secrets: vscode.SecretStorage): Promise<Api
                         .map((k) => ({
                             value: k.value.trim(),
                             label: k.label,
-                            cookie: k.cookie,
+                            // 向后兼容：旧数据字段名为 cookie，新字段名为 credential
+                            credential: k.credential ?? (k as { cookie?: string }).cookie,
                             available: k.available ?? null,
                             lastCheckedAt: k.lastCheckedAt,
                         })),
@@ -99,7 +100,7 @@ export function invalidateApiKeyStoreCache(): void {
     setStoreCache(null);
 }
 
-/** 添加 key（校验重复值）；可选附带 label / cookie */
+/** 添加 key（校验重复值）；可选附带 label / credential */
 export async function addApiKey(secrets: vscode.SecretStorage, entry: ApiKeyEntry): Promise<boolean> {
     const store = await getApiKeyStore(secrets);
     if (store.keys.some((k) => k.value === entry.value)) {
@@ -108,7 +109,7 @@ export async function addApiKey(secrets: vscode.SecretStorage, entry: ApiKeyEntr
     store.keys.push({
         value: entry.value,
         label: entry.label,
-        cookie: entry.cookie,
+        credential: entry.credential,
         available: entry.available ?? null,
     });
     await saveApiKeyStore(secrets, store);
@@ -116,13 +117,13 @@ export async function addApiKey(secrets: vscode.SecretStorage, entry: ApiKeyEntr
 }
 
 /**
- * 批量添加多个 API Key（三元组：key / cookie / 备注）。
- * 已有重复 key **不跳过**，转为更新其 cookie（补全缺失的 cookie，且新 cookie 覆盖旧的）。
+ * 批量添加多个 API Key（三元组：key / credential / 备注）。
+ * 已有重复 key **不跳过**，转为更新其 credential（补全缺失的 credential，且新 credential 覆盖旧的）。
  * 返回新增数量与更新数量。
  */
 export async function addApiKeys(
     secrets: vscode.SecretStorage,
-    entries: { value: string; cookie?: string; label?: string }[]
+    entries: { value: string; credential?: string; label?: string }[]
 ): Promise<{ added: number; updated: number }> {
     const store = await getApiKeyStore(secrets);
     let added = 0;
@@ -133,14 +134,14 @@ export async function addApiKeys(
         if (!value) {
             continue;
         }
-        const cookie = entry.cookie?.trim() || undefined;
+        const credential = entry.credential?.trim() || undefined;
         const label = entry.label?.trim() || undefined;
 
         const existing = store.keys.find((k) => k.value === value);
         if (existing) {
-            // 已存在 → 更新 cookie（补全或覆盖），不重复添加
-            if (cookie && existing.cookie !== cookie) {
-                existing.cookie = cookie;
+            // 已存在 → 更新 credential（补全或覆盖），不重复添加
+            if (credential && existing.credential !== credential) {
+                existing.credential = credential;
                 updated++;
             }
             continue;
@@ -148,7 +149,7 @@ export async function addApiKeys(
         store.keys.push({
             value,
             label,
-            cookie,
+            credential,
             available: null,
         });
         added++;
@@ -195,25 +196,25 @@ export async function setActiveKey(secrets: vscode.SecretStorage, index: number)
     await saveApiKeyStore(secrets, store);
 }
 
-/** 绑定 / 更新 / 清除指定 key 的 cookie */
-export async function setKeyCookie(secrets: vscode.SecretStorage, index: number, cookie?: string): Promise<void> {
+/** 绑定 / 更新 / 清除指定 key 的平台登录凭据 */
+export async function setKeyCredential(secrets: vscode.SecretStorage, index: number, credential?: string): Promise<void> {
     const store = await getApiKeyStore(secrets);
     if (index < 0 || index >= store.keys.length) {
         return;
     }
-    store.keys[index].cookie = cookie ? cookie.trim() : undefined;
+    store.keys[index].credential = credential ? credential.trim() : undefined;
     await saveApiKeyStore(secrets, store);
 }
 
 /**
- * 编辑指定 key 的三个字段（key 值 / cookie / 备注）。
+ * 编辑指定 key 的三个字段（key 值 / 平台登录凭据 / 备注）。
  * 修改 key 值时会校验不与其它已存在 key 冲突。
  * 仅更新调用方提供的字段（undefined 表示不修改）。
  */
 export async function updateApiKey(
     secrets: vscode.SecretStorage,
     index: number,
-    fields: { value?: string; label?: string; cookie?: string }
+    fields: { value?: string; label?: string; credential?: string }
 ): Promise<{ ok: boolean; conflict?: boolean }> {
     const store = await getApiKeyStore(secrets);
     if (index < 0 || index >= store.keys.length) {
@@ -231,8 +232,8 @@ export async function updateApiKey(
     if (fields.label !== undefined) {
         entry.label = fields.label.trim() || undefined;
     }
-    if (fields.cookie !== undefined) {
-        entry.cookie = fields.cookie.trim() || undefined;
+    if (fields.credential !== undefined) {
+        entry.credential = fields.credential.trim() || undefined;
     }
     await saveApiKeyStore(secrets, store);
     return { ok: true };

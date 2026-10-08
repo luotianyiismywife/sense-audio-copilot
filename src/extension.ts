@@ -6,6 +6,7 @@ import { TokenizerManager } from "./tokenizer/tokenizerManager";
 import { syncModelsOnStartup } from "./models/modelSync";
 import { autoPullOnStartup, flushPendingAutoPush, registerCloudSyncAutoPush } from "./cloud/cloudSync";
 import { registerCommands } from "./commands/registerCommands";
+import { getAccountCredential } from "./keys/keyManager";
 
 /**
  * 扩展激活入口。
@@ -23,11 +24,12 @@ export function activate(context: vscode.ExtensionContext) {
     // Initialize TokenizerManager with extension path
     TokenizerManager.initialize(context.extensionPath);
 
-    // Login PASETO token (60-day validity) lives in globalState — shared with
-    // the API-key manager UI and the plan-usage status bar.
-    const getLoginToken = (): string | undefined => context.globalState.get<string>("senseaudio.loginToken");
+    // Platform login credential (PASETO token) lives in the key store
+    // (`ApiKeyEntry.credential`) — shared with the API-key manager UI and the
+    // plan-usage status bar. Balance is account-level: any key's credential works.
+    const getCredential = (): Promise<string | undefined> => getAccountCredential(context.secrets);
 
-    const tokenCountStatusBarItem: vscode.StatusBarItem = initStatusBar(context, getLoginToken);
+    const tokenCountStatusBarItem: vscode.StatusBarItem = initStatusBar(context, getCredential);
     const provider = new SenseAudioChatModelProvider(context.secrets, tokenCountStatusBarItem);
 
     // Register the SenseAudio provider under the vendor id used in package.json
@@ -41,7 +43,7 @@ export function activate(context: vscode.ExtensionContext) {
     // Fire-and-forget: never blocks activation, all errors are handled internally.
     syncModelsOnStartup(context);
 
-    // Startup cloud sync auto-pull — silently pulls key/cookie/label triples
+    // Startup cloud sync auto-pull — silently pulls key/credential/label triples
     // from the cloud Gist when the cloud copy is newer than the last sync.
     // Fire-and-forget: never blocks activation, never prompts for sign-in.
     autoPullOnStartup(context);

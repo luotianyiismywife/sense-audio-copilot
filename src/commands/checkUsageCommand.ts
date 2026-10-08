@@ -7,6 +7,7 @@ import {
     getPlanUsageFetchStatus,
 } from "../balance/balanceCheck";
 import { refreshPlanUsageNow } from "../ui/statusBar";
+import { getAccountCredential } from "../keys/keyManager";
 
 /**
  * 套餐用量查询命令（`senseaudio.checkUsage`）。
@@ -20,11 +21,11 @@ import { refreshPlanUsageNow } from "../ui/statusBar";
  * - 其他失败 → 提示查看输出通道
  */
 export async function checkUsageCommand(context: vscode.ExtensionContext): Promise<void> {
-    const token = context.globalState.get<string>("senseaudio.loginToken");
+    const token = await getAccountCredential(context.secrets);
     if (!token) {
-        // 无 token 时静默返回（不弹输入框/不跳转——与上游 TokenRhythm 一致，
-        // 余额显示依赖已配置的 token，未配置时状态栏显示 "--"）。
-        logger.debug("planUsage.checkUsage.skip", { reason: "no-token" });
+        // 无凭据时静默返回（不弹输入框/不跳转——与上游 TokenRhythm 一致，
+        // 余额显示依赖已绑定的凭据，未绑定时状态栏显示 "--"）。
+        logger.debug("planUsage.checkUsage.skip", { reason: "no-credential" });
         return;
     }
 
@@ -41,7 +42,7 @@ export async function checkUsageCommand(context: vscode.ExtensionContext): Promi
         logger.warn("planUsage.checkUsage.failed", { status, hasStale: snapshot !== null });
         if (status === "unauthorized") {
             vscode.window.showErrorMessage(
-                l10n("Login token expired. Copy a fresh token from the browser (F12 → Application → Local Storage → senseaudio.cn → user → state.token)."),
+                l10n("Login credential expired. Copy a fresh token from the browser (F12 → Application → Local Storage → senseaudio.cn → user → state.token)."),
             );
         } else {
             vscode.window.showErrorMessage(l10n("Failed to fetch plan usage. See the SenseAudio output channel for details."));

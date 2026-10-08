@@ -3,12 +3,12 @@ import { logger } from "../core/logger";
 import { l10n, l10nFormat } from "../core/localize";
 import { getApiKeyStore, saveApiKeyStore, invalidateApiKeyStoreCache, type ApiKeyEntry } from "../keys/keyManager";
 import { onApiKeyStoreChanged } from "../keys/state";
-import { syncPayloadHasChanged, type SyncPayload, type SyncedKeyEntry } from "./syncPayload";
+import { syncPayloadHasChanged, readEntryCredential, type SyncPayload, type SyncedKeyEntry } from "./syncPayload";
 
 /**
  * 云同步（GitHub Gist）：
  * 使用 VS Code 内置的 GitHub 登录（vscode.authentication.getSession）获取 token，
- * 将 key/cookie/备注 三元组存储到一个私密 Gist 中，实现跨机器同步。
+ * 将 key/credential/备注 三元组存储到一个私密 Gist 中，实现跨机器同步。
  *
  * - 推送（senseaudio.syncPush）：本地 store → Gist（手动触发）
  * - 拉取（senseaudio.syncPull）：Gist → 本地 store（手动触发）
@@ -141,12 +141,15 @@ async function readGistUpdatedAt(resp: Response): Promise<string | undefined> {
     }
 }
 
-/** 规范化同步条目：过滤空值，cookie/label 去空白。 */
+/** 规范化同步条目：过滤空值，credential/label 去空白（兼容旧字段名 cookie）。 */
 function normalizeEntries(keys: SyncedKeyEntry[]): SyncedKeyEntry[] {
     return keys
         .map((k) => ({
             value: typeof k.value === "string" ? k.value.trim() : "",
-            cookie: typeof k.cookie === "string" && k.cookie.trim() ? k.cookie.trim() : undefined,
+            credential: (() => {
+                const c = readEntryCredential(k);
+                return typeof c === "string" && c.trim() ? c.trim() : undefined;
+            })(),
             label: typeof k.label === "string" && k.label.trim() ? k.label.trim() : undefined,
         }))
         .filter((k) => k.value);
@@ -157,12 +160,12 @@ function buildPayload(keys: ApiKeyEntry[]): SyncPayload {
     return {
         version: 1,
         updatedAt: new Date().toISOString(),
-        keys: normalizeEntries(keys.map((k) => ({ value: k.value, cookie: k.cookie, label: k.label }))),
+        keys: normalizeEntries(keys.map((k) => ({ value: k.value, credential: k.credential, label: k.label }))),
     };
 }
 
 /**
- * 推送本地 key/cookie/备注 到云端 Gist（senseaudio.syncPush 命令）。
+ * 推送本地 key/credential/备注 到云端 Gist（senseaudio.syncPush 命令）。
  * 未登录 GitHub 时弹出登录界面。成功后记录 globalState 同步时间。
  */
 export async function pushToCloud(context: vscode.ExtensionContext, silent = false): Promise<void> {
@@ -307,8 +310,8 @@ async function pushToCloudInner(
 }
 
 /**
- * 从云端 Gist 拉取 key/cookie/备注 覆盖本地（senseaudio.syncPull 命令）。
- * 合并策略：云端为源——按 key 值对齐，云端条目覆盖本地 cookie/label，
+ * 从云端 Gist 拉取 key/credential/备注 覆盖本地（senseaudio.syncPull 命令）。
+ * 合并策略：云端为源——按 key 值对齐，云端条目覆盖本地 credential/label，
  * 云端有本地无的条目追加，本地有云端无的条目删除；可用性状态（available/
  * lastCheckedAt）为本地数据，按 key 值保留。
  */
@@ -388,7 +391,7 @@ async function pullFromCloudInner(
                 const local = localByKey.get(entry.value);
                 return {
                     value: entry.value,
-                    cookie: entry.cookie,
+                    credential: readEntryCredential(entry),
                     label: entry.label,
                     available: local?.available ?? null,
                     lastCheckedAt: local?.lastCheckedAt,
@@ -399,7 +402,7 @@ async function pullFromCloudInner(
                 merged.length !== store.keys.length ||
                 merged.some((m, i) => {
                     const old = store.keys[i];
-                    return !old || old.value !== m.value || (old.cookie ?? "") !== (m.cookie ?? "") || (old.label ?? "") !== (m.label ?? "");
+                    return !old || old.value !== m.value || (old.credential ?? "") !== (m.credential ?? "") || (old.label ?? "") !== (m.label ?? "");
                 });
 
             if (!changed) {

@@ -26,7 +26,7 @@ import { REASON_TEXT, buildAllKeysUnavailableDetail, tryTransientRetryRound } fr
 /**
  * 多 API Key 轮换循环。
  *
- * 每轮选一个 key，跳过余额不足（cookie 主动预检）或返回轮换错误
+ * 每轮选一个 key，跳过余额不足（凭据主动预检）或返回轮换错误
  * （401/402/429/503，状态码与文本 patterns 可配置）的 key。
  * 全部 key 用尽时列出脱敏 key + 失败原因；若失败均为瞬态（429/503）
  * 则按 `senseaudio.transientRetryTimes` 指数退避重试整轮。
