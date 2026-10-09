@@ -19,14 +19,14 @@
 
 ### 失效检测机制
 
-- **被动检测（唯一机制）**：请求失败后根据 HTTP 状态码与错误文本判定 key 失效并切换。
-  - **确定性失效**（持久化 `available=false`）：**402 余额不足** → `balance`；**401 无效 Key** → `invalid`。
-  - **瞬态失效**（仅内存冷却，不持久化）：**429 限流** → `rate_limited`；**503 服务端繁忙** → `server_error`。
-  - 状态码与文本 patterns 均可配置（`apiKeyRotationStatusCodes` / `apiKeyRotationErrorPatterns`）。
+- **被动检测（唯一机制）**：请求失败后由 `matchErrorRule` 按 `senseaudio.errorRules` 四元组（code + message + statusCode + action）分类并处置。
+  - **`code` 精确匹配**（错误体 `error.code`，**主要匹配字段**）优先于 **`statusCode` 兜底**（HTTP 状态码）；`message` 仅作可读性说明不参与匹配。
+  - **`action` 与 key 状态一一对应**：`retrySameKey` → 状态不变（不换 key，退避后重试同一个 key）；`rotateCooldown` → 冷却中（换 key，仅内存冷却，到期自动恢复）；`rotatePersist` → 不可用（换 key，持久化 `available=false`）。
+  - 默认规则（基于实测）：封号（`code=billing`，400）→ 不可用；上游流中断（`code=upstream_stream_error`，400）→ 不换重试；余额不足（`code=INSUFFICIENT_BALANCE`，402）→ 不可用；限流（429/503）→ 冷却。
 - **手动检测（自愈）**：QuickPick 管理中提供"检测可用性"，对选中 key 执行**最小真实聊天请求**（`say ok`、`max_tokens=8`；余额不足时被 402 拦截不耗 token），通过后标记为可用（充值后无需手动改状态）。**不使用 `/v1/models` 校验**（余额 < 0 也能返回 200，无法作为可用性判据）。
-- **瞬态自动重试**：全部 key 均因瞬态错误（默认 429/500/503，`transientRetryStatusCodes` 可配置）失败时，按 `transientRetryTimes`（默认 3）自动重试整轮——指数退避等待（2s/4s/8s，上限 8s），重试前**清空瞬态冷却**（否则 `pickNextApiKey` 会跳过全部 key 使重试无效），次数用尽才报错。
-- **平台侧错误不换 key**：500 Internal Server Error 是平台问题而非 key 问题——它命中瞬态重试但**不**命中轮换状态码，因此**不标记 key、不换 key**，仅退避后重试同一个 key（日志 `key.transientRetrySameKey`）。**瞬态上游错误（`upstream_stream_error`，400）同样按平台侧处理**（2026-10-09 修复）：上游模型流意外中断（消息 "Please retry the request"）是平台侧瞬态问题而非 key 问题——`isKeyRotationError` 对其**强制返回 false**（即使 400 被配置进 `apiKeyRotationStatusCodes` 也不轮换）、`isTransientRetryError` 返回 true（退避重试同一个 key）、`getKeyRotationReason` 返回 `server_error`（仅冷却不持久化）；此前被误判为 `api_error` 持久化 `available=false`，导致 key 被永久禁用。
-- **全部 key 不可用报错**：报错列出每个 key 的脱敏 ID + 原因（`buildAllKeysUnavailableDetail`，如 `sk_****abcd: 服务端繁忙 (503)`），区分"瞬态失败请稍后重试"（429/503）与"确定性失败请检测"（402/401）。
+- **瞬态自动重试**：全部 key 均因 `rotateCooldown` 规则失败时，按 `transientRetryTimes`（默认 3）自动重试整轮——指数退避等待（2s/4s/8s，上限 8s），重试前**清空瞬态冷却**（否则 `pickNextApiKey` 会跳过全部 key 使重试无效），次数用尽才报错。
+- **平台侧错误不换 key**：`retrySameKey` 规则（如 500 Internal Server Error、`upstream_stream_error`）是平台/客户端侧问题而非 key 问题——**不标记 key、不换 key**，仅退避后重试同一个 key（日志 `key.transientRetrySameKey`）。
+- **全部 key 不可用报错**：报错列出每个 key 的脱敏 ID + 原因（`buildAllKeysUnavailableDetail`），区分"瞬态失败请稍后重试"（`rotateCooldown`）与"确定性失败请检测"（`rotatePersist`）。
 - **余额展示**：管理界面所有 key 列表（主界面 / 检测二级界面 / 删除·设当前·编辑·绑定选择界面）显示账号余额——现金 `$(coin)/$(error) 充值 ¥X.XX` + 代金券 `$(gift) 赠送 ¥Y.YY（至 YYYY-MM-DD）`。数据源为 key 绑定的平台登录凭据（PASETO token）查 `platform.senseaudio.cn/api/user/self`（**按账号粒度**，所有 key 共享同一份凭据），见 `src/balance/accountInfo.ts`。
 
 > **为什么没有主动余额预检**：旧平台 cookie 端点 `senseaudio.cn/api/usage-summary` 与 `/api/api-keys`
@@ -93,7 +93,7 @@ const transientExhausted = new Map<string, TransientExhausted>();
 - `available=false` 是**持久化**的（SecretStorage），重启保留（确定性原因：余额不足 / 无效 Key）。
 - 429/503 是**瞬态冷却**（内存 + 冷却时间 `apiKeyExhaustedCooldownMin`，默认 10 分钟），到期自动恢复，不写持久化。**冷却期间 `pickNextApiKey` 会跳过该 key**；瞬态整轮重试前需 `resetExhaustedKeys(secrets,false)` 清空冷却。
 - **自愈**：请求成功时自动把该 key 恢复为 `available=true`。
-- **503 属于瞬态而非确定性**：平台繁忙通常很快恢复，持久化不可用会导致冷却到期后仍被阻挡。`getKeyRotationReason` 精确提取原因（402/401→确定性；429/503→瞬态），`markApiKeyExhausted` 按 `TRANSIENT_REASONS`（rate_limited/server_error）决定只冷却不持久化。
+- **503 属于瞬态而非确定性**：平台繁忙通常很快恢复，持久化不可用会导致冷却到期后仍被阻挡。处置由 `errorRules` 的 `action` 决定（`rotateCooldown` 仅冷却 / `rotatePersist` 持久化），`markApiKeyExhausted` 按 `action` 决定是否持久化。
 
 ---
 
@@ -106,22 +106,19 @@ const transientExhausted = new Map<string, TransientExhausted>();
 | `getApiKeyStore(secrets)` | `(secrets) => Promise<ApiKeyStore>` | 读取并缓存 store；自动迁移旧 `senseaudio.apiKey`；JSON 损坏时回退修复 |
 | `saveApiKeyStore(secrets, store)` | `(secrets, store) => Promise<void>` | 写新格式；成功后删除旧 key（幂等） |
 | `getApiKeyMode()` / `getSingleKeyFallback()` | 同步 | 读取 `apiKeyMode`（默认 sticky）/ `singleKeyFallback`（默认 switch），非法值回退 |
-| `getRotationStatusCodes()` / `getRotationErrorPatterns()` | 同步 | 触发轮换的状态码（**默认 [401,402,429,503]**）/ 文本 patterns |
-| `getTransientRetryStatusCodes()` / `getTransientRetryTimes()` | 同步 | 触发瞬态整轮重试的状态码（**默认 [429,500,503]**，与轮换状态码解耦）/ 重试次数（默认 3，0 禁用） |
+| `getErrorRules()` | 同步 | 读取 `errorRules` 四元组（code + message + statusCode + action，默认见 package.json） |
+| `getTransientRetryTimes()` | 同步 | 瞬态整轮重试次数（默认 3，0 禁用） |
 | `getExhaustedCooldownMin()` | 同步 | 429/503 瞬态冷却时长（分钟，默认 10） |
 | `getPrimaryApiKey(secrets)` | `(secrets) => Promise<ApiKeyEntry \| undefined>` | 模型列表/同步用：single→active；rotation→第一个可用的（跳过冷却与不可用） |
 | `pickNextApiKey(secrets, mode)` | `(secrets, mode) => Promise<ApiKeyEntry \| undefined>` | 轮询/单 key 选择逻辑（见 3.2） |
-| `shouldSingleKeyFallbackSwitch(secrets, failedKeys)` | `(secrets, failedKeys) => Promise<boolean>` | single+fallback=switch 时是否应切换：仅本轮 active key 因余额不足（402）失败才 true；401/429/503 与历史遗留不可用均不切换 |
+| `shouldSingleKeyFallbackSwitch(secrets, failedKeys)` | `(secrets, failedKeys) => Promise<boolean>` | single+fallback=switch 时是否应切换：仅本轮 active key 命中 `rotatePersist` 才 true；`rotateCooldown` 与历史遗留不可用均不切换 |
 | `setActiveKeyByValue(secrets, keyValue)` | `(secrets, keyValue) => Promise<void>` | 按值把 key 设为 single 当前 key（402 自动切换后调用，后续请求直接用新 key，避免重复 fallback+弹窗） |
 | `getTransientExhaustedInfo(keyValue)` | 同步 | 查询瞬态冷却状态（原因 + 剩余秒数），冷却到期自动清除 |
 | `hasTransientExhaustedKey(secrets)` | 异步 | 是否存在冷却中的 key（供"全部不可选"时判断是否值得整轮自动重试） |
 | `isApiKeyEligible(entry)` | 同步 | 判断是否可被选中（非冷却中、非 `available=false`） |
-| `isKeyRotationError(err)` | 同步 | 匹配状态码 `[401]/[402]/[429]/[503]` 或错误文本 patterns → 判定是否应切换 |
-| `isTransientRetryError(err)` | 同步 | 状态码匹配 `transientRetryStatusCodes`（默认 [429,500,503]）或命中瞬态上游错误签名（`upstream_stream_error`）→ 瞬态类，值得整轮自动重试 |
-| `isTransientExhaustedReason(reason)` | 同步 | 是否为瞬态原因（`rate_limited`/`server_error`） |
-| `getKeyRotationReason(err)` | 同步 | **精确提取失效原因**（比 patterns 更准）：402/INSUFFICIENT_BALANCE→`balance`；401→`invalid`；429/RATE_LIMITED→`rate_limited`；503→`server_error`；其他→`api_error` |
+| `matchErrorRule(err)` | 同步 | 按 `errorRules` 数组顺序匹配（code 精确匹配优先于 statusCode 兑底），返回 `ErrorRule` 或 undefined |
 | `getKeyUnavailableReason(entry)` | 同步 | 取当前不可用原因（供报错展示）：冷却中→`rate_limited`/`server_error`；持久化不可用→`unavailable`；其他→`balance` |
-| `markApiKeyExhausted(secrets, key, reason)` | 异步 | **瞬态原因**（rate_limited/server_error）→ 仅内存冷却不持久化；**确定性原因**（balance/invalid/api_error）→ 持久化 `available=false` |
+| `markApiKeyExhausted(secrets, key, reason, action)` | 异步 | **按 `action` 决定处置**：`rotateCooldown` → 仅内存冷却不持久化；`rotatePersist` → 持久化 `available=false` |
 | `markApiKeyAvailable(secrets, key)` | 异步 | 置 `available=true`，清冷却（自愈/手动检测通过） |
 | `updateKeyAvailability(secrets, key, available)` | 异步 | 通用状态更新 |
 | `resetExhaustedKeys(secrets, resetPersisted)` | 异步 | 清空瞬态冷却；可选将所有 `available=false` 重置为 `null`（`resetPersisted=true`） |
@@ -197,17 +194,11 @@ while (true):
       成功 → 自愈置可用 + 返回
   catch err:
       取消/超时 → 抛出
-      isKeyRotationError(err):                   // 401/402/429/503
-          reason = 瞬态重试命中但原因非瞬态 ? "server_error" : getKeyRotationReason(err)
-          failedKeys.set(key, reason)
-          markApiKeyExhausted(key, reason)       // 瞬态→仅冷却；确定性→持久化
-          continue                               // 换下一个 key
-      isTransientRetryError(err):                // 500 等平台侧错误
-          if tryTransientRetryRound(sameKeyRetryCount):
-              forceKey = key                     // 强制同一 key，不轮换
-              continue
-          抛出
-      其他（400/403/网络/IMAGE_SENSITIVE）→ 抛出，不轮换
+      rule = matchErrorRule(err):                // errorRules 四元组
+          action=rotateCooldown → failedKeys.set(key, rule); markApiKeyExhausted(key, reason, "rotateCooldown"); continue  // 换 key，仅冷却
+          action=rotatePersist  → failedKeys.set(key, rule); markApiKeyExhausted(key, reason, "rotatePersist");  continue  // 换 key，持久化
+          action=retrySameKey   → if tryTransientRetryRound(sameKeyRetryCount): forceKey = key; continue  // 不换 key，重试同一个
+      未命中任何规则（403/网络/IMAGE_SENSITIVE）→ 抛出，不轮换
 ```
 
 **两个独立的重试计数器**：`wholeRoundRetryCount`（全部 key 瞬态失败 / 无可用 key）与 `sameKeyRetryCount`（500 同 key 重试）分开计数——500 重试不消耗 429/503 的整轮配额，反之亦然。
@@ -241,18 +232,18 @@ while (true):
 | C7 | 404/405 等 | 不轮换，直接抛错 | ✅ |
 | C8 | 502/504 网关错误 | HTTP 层 `executeWithRetry` 重试（默认 2 次） | ✅ |
 | C8b | 全部 key 均因瞬态错误（429/503）失败 | **整轮自动重试**（`tryTransientRetryRound`）：清空瞬态冷却（`resetExhaustedKeys(secrets,false)`）→ 指数退避（2s/4s/8s）→ 重试整轮，最多 `transientRetryTimes` 次；次数用尽才报错（带原因 + "请稍后重试"） | ✅ |
-| C8c | **500 Internal Server Error** | 命中瞬态重试但**不**命中轮换 → **不标记 key、不换 key**，退避后重试**同一个 key**（`forceKey`，日志 `key.transientRetrySameKey`）；`sameKeyRetryCount` 独立计数 | ✅ |
-| C8d | **`upstream_stream_error`（400，上游模型流中断）** | 平台侧瞬态问题 → `isKeyRotationError` 强制 false（即使 400 入轮换配置也不轮换）、`isTransientRetryError` true（退避重试同一个 key）、`getKeyRotationReason` → `server_error`（仅冷却不持久化） | ✅ |
+| C8c | **500 Internal Server Error** | 命中 `retrySameKey` 规则 → **不标记 key、不换 key**，退避后重试**同一个 key**（`forceKey`，日志 `key.transientRetrySameKey`）；`sameKeyRetryCount` 独立计数 | ✅ |
+| C8d | **`upstream_stream_error`（400，上游模型流中断）** | 默认规则 `code=upstream_stream_error` → `retrySameKey`（退避重试同一个 key，不轮换不持久化） | ✅ |
 | C9 | 网络错误（fetch 失败） | 不轮换（同一平台，换 key 无效），由重试机制处理 | ✅ |
 | C10 | 超时 | 不轮换，走现有超时友好提示 | ✅ |
 | C11 | 用户取消 | 不轮换，重新抛出原始错误 | ✅ |
 | C12 | IMAGE_SENSITIVE | 不轮换（内容问题），抛友好错误 | ✅ |
 | C13 | 流解析中途错误 | 不轮换（流已开始），抛错 | ✅ |
-| C14 | 状态码在配置列表但文本不匹配 | 按状态码匹配 → 轮换 | ✅ |
-| C15 | 状态码不在列表但文本匹配 patterns | 按文本匹配 → 轮换 | ✅ |
-| C16 | 所有 key 尝试后全部失败 | 报"所有 API Key 均不可用"，汇总各 key 失败原因（脱敏，如 `sk_****abcd: 服务端繁忙 (503)`），区分瞬态（"请稍后重试"）与确定性（"用管理命令检测"） | ✅ |
+| C14 | 错误体 code 命中规则 | 按 code 精确匹配 → 取对应 action | ✅ |
+| C15 | 错误体无 code 但状态码命中规则 | 按 statusCode 兑底 → 取对应 action | ✅ |
+| C16 | 所有 key 尝试后全部失败 | 报"所有 API Key 均不可用"，汇总各 key 失败原因（脱敏），区分 `rotateCooldown`（"请稍后重试"）与 `rotatePersist`（"用管理命令检测"） | ✅ |
 | C17 | 轮换过程中部分 key 成功 | 正常返回，成功 key 游标前移 | ✅ |
-| C18 | 错误命中瞬态重试状态码但原因非瞬态（如 500→`api_error`） | `isTransientRetryError` 命中 → 规范化为 `server_error` 仅内存冷却不持久化，保证整轮重试可重新选 key | ✅ |
+| C18 | 错误未命中任何规则（如 403） | `matchErrorRule` 返回 undefined → 不轮换不重试，直接抛错 | ✅ |
 
 ### 4.2 视觉代理（ask_image 第二轮及后续请求）
 
@@ -339,10 +330,10 @@ while (true):
 | # | 情况 | 处理 | 覆盖 |
 |---|------|------|------|
 | J1 | `apiKeyMode` 非法值 | 回退 `sticky` | ✅ |
-| J2 | `apiKeyRotationStatusCodes` 空数组 | 仅按文本 patterns 匹配 | ✅ |
-| J3 | `apiKeyRotationErrorPatterns` 空数组 | 仅按状态码匹配 | ✅ |
-| J4 | 两者都空 | 禁用被动轮换 | ✅ |
-| J5 | `apiKeyExhaustedCooldownMin = 0` | 429/503 冷却立即恢复（仍换 key，但可立即再用） | ✅ |
+| J2 | `errorRules` 中某条只有 `code` | 仅按 code 精确匹配 | ✅ |
+| J3 | `errorRules` 中某条只有 `statusCode` | 仅按状态码兑底匹配 | ✅ |
+| J4 | `errorRules` 空数组 | 回退 package.json 默认规则 | ✅ |
+| J5 | `apiKeyExhaustedCooldownMin = 0` | `rotateCooldown` 冷却立即恢复（仍换 key，但可立即再用） | ✅ |
 | J6 | `transientRetryTimes = 0` | 禁用瞬态整轮自动重试 | ✅ |
 | J7 | `transientRetryTimes` 非法/超范围 | 夹取到 [0, 10]，非数字回退 3 | ✅ |
 | J8 | `singleKeyFallback` 非法值 | 回退 `switch` | ✅ |
@@ -374,10 +365,8 @@ while (true):
 | 设置 | 类型 | 默认 | 说明 |
 |------|------|------|------|
 | `senseaudio.apiKeyMode` | string | `sticky` | `sticky` / `rotation` / `single` |
-| `senseaudio.singleKeyFallback` | string | `switch` | single 模式失败行为：`switch`（仅 402 切换）/ `error` |
-| `senseaudio.apiKeyRotationStatusCodes` | number[] | `[401,402,429,503]` | 触发 key 轮换的状态码 |
-| `senseaudio.apiKeyRotationErrorPatterns` | string[] | 见 `keys/config.ts` | 触发轮换的错误文本 patterns |
-| `senseaudio.transientRetryStatusCodes` | number[] | `[429,500,503]` | 触发瞬态整轮重试的状态码（与轮换解耦） |
+| `senseaudio.singleKeyFallback` | string | `switch` | single 模式失败行为：`switch`（active key 命中 `rotatePersist` 时切换）/ `error` |
+| `senseaudio.errorRules` | object[] | 见 package.json | **错误分类规则（四元组：code + message + statusCode + action）**，只配置这一处 |
 | `senseaudio.transientRetryTimes` | number | `3` | 瞬态整轮重试次数（0 禁用，夹取 0–10） |
 | `senseaudio.apiKeyExhaustedCooldownMin` | number | `10` | 429/503 瞬态冷却时长（分钟） |
 | `senseaudio.minBalanceCny` | number | `0` | 余额阈值（仅用于 UI 标记充值余额不足） |

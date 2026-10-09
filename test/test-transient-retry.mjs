@@ -46,14 +46,34 @@ Module._load = function (request, parent, isMain) {
     return originalLoad.call(this, request, parent, isMain);
 };
 
-const { matchErrorRule, isKeyRotationError, isTransientRetryError } = require("../out/keys/health.js");
+const { matchErrorRule } = require("../out/keys/health.js");
 const { getErrorRules } = require("../out/keys/config.js");
 
+// 从 matchErrorRule 派生语义断言（生产代码直接用 matchErrorRule，不再导出薄封装）
+const isKeyRotationError = (err) => {
+    const r = matchErrorRule(err);
+    return r !== undefined && r.action !== "retrySameKey";
+};
+const isTransientRetryError = (err) => {
+    const r = matchErrorRule(err);
+    return r !== undefined && r.action !== "rotatePersist";
+};
+
 let passed = 0;
+const pending = [];
 function check(name, fn) {
-    fn();
-    passed++;
-    console.log(`  ok  ${name}`);
+    const r = fn();
+    if (r && typeof r.then === "function") {
+        pending.push(
+            r.then(() => {
+                passed++;
+                console.log(`  ok  ${name}`);
+            })
+        );
+    } else {
+        passed++;
+        console.log(`  ok  ${name}`);
+    }
 }
 
 /** 构造与真实错误消息同形的 Error（provider 抛出的格式） */
@@ -185,5 +205,54 @@ check("message 不参与匹配（仅说明）", () => {
     }
 });
 
+// ---------------------------------------------------------------------------
+// 6. markApiKeyExhausted：处置由 action 决定（回归：曾靠 reason 字符串推断，
+//    导致 429 的 message "限流" 不在 TRANSIENT_REASONS 里 → 被误持久化为不可用）
+// ---------------------------------------------------------------------------
+console.log("markApiKeyExhausted（action 决定处置）");
+
+const { markApiKeyExhausted, isApiKeyEligible, getKeyDisplayStatus, getApiKeyStore, invalidateApiKeyStoreCache } =
+    require("../out/keys/keyManager.js");
+
+/** 内存版 SecretStorage mock */
+function makeSecrets(initialKeys) {
+    const data = new Map();
+    data.set("senseaudio.apiKeys", JSON.stringify({ keys: initialKeys, activeIndex: 0 }));
+    return {
+        async get(key) {
+            return data.get(key);
+        },
+        async store(key, value) {
+            data.set(key, value);
+        },
+        async delete(key) {
+            data.delete(key);
+        },
+        _data: data,
+    };
+}
+
+check("rotateCooldown → 仅冷却，不持久化（key 仍不可选但 available 不为 false）", async () => {
+    const secrets = makeSecrets([{ value: "sk_a", available: null }]);
+    invalidateApiKeyStoreCache();
+    await markApiKeyExhausted(secrets, "sk_a", "限流", "rotateCooldown");
+    invalidateApiKeyStoreCache();
+    const store = await getApiKeyStore(secrets);
+    assert.equal(store.keys[0].available, null, "available 不应被持久化为 false");
+    assert.equal(isApiKeyEligible(store.keys[0]), false, "冷却中应不可选");
+    assert.equal(getKeyDisplayStatus(store.keys[0]), "cooldown");
+});
+
+check("rotatePersist → 持久化 available=false", async () => {
+    const secrets = makeSecrets([{ value: "sk_b", available: null }]);
+    invalidateApiKeyStoreCache();
+    await markApiKeyExhausted(secrets, "sk_b", "余额不足", "rotatePersist");
+    invalidateApiKeyStoreCache();
+    const store = await getApiKeyStore(secrets);
+    assert.equal(store.keys[0].available, false, "available 应被持久化为 false");
+    assert.equal(getKeyDisplayStatus(store.keys[0]), "unavailable");
+});
+
 Module._load = originalLoad;
+await Promise.all(pending);
 console.log(`\nerror rules: ${passed} checks passed`);

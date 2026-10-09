@@ -62,8 +62,16 @@ const srcText = new Map(srcFiles.map((f) => [f, fs.readFileSync(f, "utf8")]));
     // 否则重导出行本身会被计为一次引用，导致「文档有、代码无」或真正无人
     // 使用的导出被漏报（假阴性）。
     const isBarrel = (text) => {
-        const lines = text.split("\n").filter((l) => l.trim() && !l.trim().startsWith("//") && !l.trim().startsWith("*") && !l.trim().startsWith("/*"));
-        return lines.length > 0 && lines.every((l) => /^export\s*(\{[^}]*\}|\*)\s*from\s*"/.test(l.trim()));
+        // 去掉注释后，检查是否只包含 `export ... from "..."` 语句。
+        // 必须支持**多行 export 块**（`export {\n  a,\n  b,\n} from "./x";`）——
+        // 逐行匹配会漏判，导致 barrel 重导出行被计为「使用」，掩盖真正的死导出。
+        const stripped = text
+            .replace(/\/\*[\s\S]*?\*\//g, "")
+            .replace(/\/\/[^\n]*/g, "")
+            .trim();
+        if (!stripped) return false;
+        const stmts = stripped.split(";").map((s) => s.trim()).filter(Boolean);
+        return stmts.length > 0 && stmts.every((s) => /^export\s+(?:type\s+)?(\{[\s\S]*\}|\*)\s+from\s+"/.test(s));
     };
     const barrels = new Set(all.filter(([, t]) => isBarrel(t)).map(([f]) => f));
     for (const [f, text] of all) {

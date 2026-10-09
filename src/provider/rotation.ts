@@ -17,8 +17,9 @@ import {
     setActiveKeyByValue,
     shouldSingleKeyFallbackSwitch,
     type ApiKeyEntry,
+    type ErrorRule,
 } from "../keys/keyManager";
-import { REASON_TEXT, buildAllKeysUnavailableDetail, tryTransientRetryRound } from "./errors";
+import { buildAllKeysUnavailableDetail, tryTransientRetryRound } from "./errors";
 
 /**
  * 多 API Key 轮换循环。
@@ -65,10 +66,11 @@ export async function runKeyRotationLoop(params: RotationLoopParams): Promise<vo
     // already advanced and pickNextApiKey would silently switch to the next
     // key — contradicting "500 is a platform problem, do not rotate keys".
     let forceKey: ApiKeyEntry | undefined;
-    // Track per-key failure reasons so the "all keys exhausted" error can
+    // Track per-key failure rules so the "all keys exhausted" error can
     // show which key failed and why (masked), and distinguish transient
-    // failures (429/503 — retry later) from permanent ones (402/401 — check).
-    const failedKeys = new Map<string, string>();
+    // failures (rotateCooldown — retry later) from permanent ones
+    // (rotatePersist — check).
+    const failedKeys = new Map<string, ErrorRule>();
     // Transient (429/503) whole-round auto-retry: when every key is busy or
     // rate-limited, wait with backoff and retry the whole round instead of
     // failing immediately (platform congestion usually clears within seconds).
@@ -90,9 +92,9 @@ export async function runKeyRotationLoop(params: RotationLoopParams): Promise<vo
         // If every key has failed at least one round, stop trying.
         if (totalKeys > 0 && failedKeys.size >= totalKeys) {
             const detail = [...failedKeys.entries()]
-                .map(([key, reason]) => `${maskApiKey(key)}: ${l10n(REASON_TEXT[reason] ?? reason)}`)
+                .map(([key, rule]) => `${maskApiKey(key)}: ${rule.message ?? rule.code ?? ""}`)
                 .join("; ");
-            const hasTransient = [...failedKeys.values()].some((r) => r === "rate_limited" || r === "server_error");
+            const hasTransient = [...failedKeys.values()].some((r) => r.action === "rotateCooldown");
             // Platform busy / rate-limited: back off and retry the whole
             // round automatically instead of failing immediately.
             if (hasTransient && (await tryTransientRetryRound(secrets, wholeRoundRetryCount, maxTransientRetries))) {
@@ -192,26 +194,15 @@ export async function runKeyRotationLoop(params: RotationLoopParams): Promise<vo
             }
             // 错误分类（errorRules 四元组：code + message + statusCode + action）
             const rule = matchErrorRule(err);
-            if (rule?.action === "rotateCooldown") {
-                // 换 key + 仅内存冷却（瞬态，冷却到期自动恢复）
+            if (rule?.action === "rotateCooldown" || rule?.action === "rotatePersist") {
+                // 换 key（冷却或持久化失效，由 action 决定）
                 const reason = rule.message ?? rule.code ?? "";
-                failedKeys.set(currentEntry.value, reason);
-                await markApiKeyExhausted(secrets, currentEntry.value, reason);
+                failedKeys.set(currentEntry.value, rule);
+                await markApiKeyExhausted(secrets, currentEntry.value, reason, rule.action);
                 logger.warn("key.rotation", {
                     key: maskApiKey(currentEntry.value),
                     reason,
-                    error: err instanceof Error ? err.message : String(err),
-                });
-                continue; // try next key
-            }
-            if (rule?.action === "rotatePersist") {
-                // 换 key + 持久化失效（确定性：封号 / 余额不足 / 无效 key）
-                const reason = rule.message ?? rule.code ?? "";
-                failedKeys.set(currentEntry.value, reason);
-                await markApiKeyExhausted(secrets, currentEntry.value, reason);
-                logger.warn("key.rotation", {
-                    key: maskApiKey(currentEntry.value),
-                    reason,
+                    action: rule.action,
                     error: err instanceof Error ? err.message : String(err),
                 });
                 continue; // try next key

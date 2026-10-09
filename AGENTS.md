@@ -27,7 +27,7 @@
 | 能力 | 说明 |
 |------|------|
 | **Chat 模型提供商** | 实现 `LanguageModelChatProvider` 接口，向 VS Code 注册为 `senseaudio` 厂商 |
-| **多 API Key 轮询** | 支持多个 API Key（SecretStorage 加密存储 `senseaudio.apiKeys`），三种模式：`sticky`（默认，固定使用一个 key，仅失效时切下一个并钉住——前缀缓存命中率最高，切换后不自动切回）/ `rotation`（轮询使用、跳过不可用 key）/ `single`（仅用当前 key；`senseaudio.singleKeyFallback`（默认 `switch`）下**仅在余额不足（402）时**自动切换到下一个可用 key 并经 `setActiveKeyByValue` 设为当前使用 + 右下角弹窗提示——401 无效 Key / 429 限流 / 503 繁忙等其他错误不切换、走 single 专属报错文案；`error` 下任何错误都直接报错不切换）。**被动检测**：**只配置 `senseaudio.errorRules` 一处**（四元组：code + message + statusCode + action，`src/keys/config.ts` 的 `getErrorRules`）。按数组顺序匹配，首个命中即生效：`code`（错误体 error.code 精确匹配，**主要匹配字段**）优先于 `statusCode`（HTTP 状态码兑底）；`message` 仅作可读性说明**不参与匹配**。`action` 与 key 状态一一对应：`retrySameKey` → 状态不变（不换 key，退避后重试同一个 key）、`rotateCooldown` → 冷却中（换 key，仅内存冷却，到期自动恢复）、`rotatePersist` → 不可用（换 key，持久化 available=false）。默认规则基于实测：封号（`code=billing`，400）→ 不可用；上游流中断（`code=upstream_stream_error`，400）→ 不换重试；余额不足（`code=INSUFFICIENT_BALANCE`，402）→ 不可用；限流（429/503）→ 冷却**手动检测**：`senseaudio.manageApiKeys` 命令 QuickPick 管理（增删/设为当前/绑定平台登录凭据/重置失效/检测可用性——最小真实聊天请求 `say ok`，实测余额不足时 402 拦截不耗 token）。**UI 增强**：表单式批量导入（三元组 key/凭据/备注，逐条输入）、检测二级界面（列出全部 key 状态 + "检测所有"选项）、编辑 API Key（三字段 value/凭据/label，冲突校验）、**轮询模式下隐藏"设为当前使用"**（★ Current 标记与动作项均仅 single 模式显示）、批量导入时已存在 key 自动更新凭据不重复添加、**所有 key 管理界面（主界面 / 检测二级界面 / 删除·设当前·编辑·绑定·清除凭据的 key 选择界面）均显示账号余额**（key 绑定的平台登录凭据经 `getAccountInfoCached` TTL 缓存查询 `platform.senseaudio.cn/api/user/self`，余额按**账号**粒度、所有 key 共享：现金余额显示 `$(coin)/$(error) 充值 ¥X.XX`（> `minBalanceCny` 为 coin、≤ 为 error），代金券可用显示 `$(gift) 赠送 ¥Y.YY`（> 0 时显示，附 `（至 YYYY-MM-DD）` 最早到期日，本地时区格式化），查询失败显示 `$(warning) 余额未知`）。**全部 key 用尽时**：轮换循环跟踪每个 key 的失败原因，报错列出脱敏 key + 原因（如 `sk_****abcd: 服务端繁忙 (503)`），并区分"瞬态失败请稍后重试"（429/503）与"确定性失败请检测"（402/401）；`pickNextApiKey` 无可用 key 的兜底报错同样列出每个 key 的原因（`buildAllKeysUnavailableDetail`）。**瞬态自动重试**：全部 key 均因瞬态错误（默认 429/500/503，状态码可配置 `senseaudio.transientRetryStatusCodes`，与触发轮换的状态码解耦）失败时，按 `senseaudio.transientRetryTimes`（默认 3）自动重试整轮——指数退避等待（2s/4s/8s，上限 8s）且**重试前清空瞬态冷却**（`resetExhaustedKeys(secrets,false)`，否则冷却期间 `pickNextApiKey` 会跳过全部 key 使重试无效），重试次数用尽后才报错。**平台侧错误不换 key**：500 Internal Server Error 是平台问题而非 key 问题——它命中瞬态重试但**不**命中轮换状态码，因此**不标记 key、不换 key**，仅退避后重试同一个 key（日志 `key.transientRetrySameKey`）。**瞬态上游错误（`upstream_stream_error`，400）同样按平台侧处理**（2026-10-09 修复）：上游模型流意外中断（消息 "Please retry the request"）是平台侧瞬态问题而非 key 问题——`isKeyRotationError` 对其**强制返回 false**（即使 400 被配置进 `apiKeyRotationStatusCodes` 也不轮换）、`isTransientRetryError` 返回 true（退避重试同一个 key）、`getKeyRotationReason` 返回 `server_error`（仅冷却不持久化）；此前被误判为 `api_error` 持久化 `available=false`，导致 key 被永久禁用。**瞬态判定（`isTransientRetryError`）**：错误命中瞬态重试状态码但原因非瞬态（如 500→`api_error`）时，规范化为 `server_error` 仅内存冷却不持久化，保证整轮重试可重新选 key。旧版单 key `senseaudio.apiKey` 自动迁移。`/v1/models` 实测不校验余额（余额 < 0 也 200），模型列表/启动同步用任意有效 key 即可。**key 三元组不随 VS Code 设置同步（2026-10-07 确认）**：SecretStorage 数据被 VS Code Settings Sync 设计上排除（每台机器独立加密，永不同步）——换机器/重装后 key 列表为空；跨机器迁移走下方「云同步（GitHub Gist）」的 `senseaudio.syncPush` / `syncPull`，或手动批量导入重新录入 |
+| **多 API Key 轮询** | 支持多个 API Key（SecretStorage 加密存储 `senseaudio.apiKeys`），三种模式：`sticky`（默认，固定使用一个 key，仅失效时切下一个并钉住——前缀缓存命中率最高，切换后不自动切回）/ `rotation`（轮询使用、跳过不可用 key）/ `single`（仅用当前 key；`senseaudio.singleKeyFallback`（默认 `switch`）下**仅在余额不足（402）时**自动切换到下一个可用 key 并经 `setActiveKeyByValue` 设为当前使用 + 右下角弹窗提示——401 无效 Key / 429 限流 / 503 繁忙等其他错误不切换、走 single 专属报错文案；`error` 下任何错误都直接报错不切换）。**被动检测**：**只配置 `senseaudio.errorRules` 一处**（四元组：code + message + statusCode + action，`src/keys/config.ts` 的 `getErrorRules`）。按数组顺序匹配，首个命中即生效：`code`（错误体 error.code 精确匹配，**主要匹配字段**）优先于 `statusCode`（HTTP 状态码兑底）；`message` 仅作可读性说明**不参与匹配**。`action` 与 key 状态一一对应：`retrySameKey` → 状态不变（不换 key，退避后重试同一个 key）、`rotateCooldown` → 冷却中（换 key，仅内存冷却，到期自动恢复）、`rotatePersist` → 不可用（换 key，持久化 available=false）。默认规则基于实测：封号（`code=billing`，400）→ 不可用；上游流中断（`code=upstream_stream_error`，400）→ 不换重试；余额不足（`code=INSUFFICIENT_BALANCE`，402）→ 不可用；限流（429/503）→ 冷却**手动检测**：`senseaudio.manageApiKeys` 命令 QuickPick 管理（增删/设为当前/绑定平台登录凭据/重置失效/检测可用性——最小真实聊天请求 `say ok`，实测余额不足时 402 拦截不耗 token）。**UI 增强**：表单式批量导入（三元组 key/凭据/备注，逐条输入）、检测二级界面（列出全部 key 状态 + "检测所有"选项）、编辑 API Key（三字段 value/凭据/label，冲突校验）、**轮询模式下隐藏"设为当前使用"**（★ Current 标记与动作项均仅 single 模式显示）、批量导入时已存在 key 自动更新凭据不重复添加、**所有 key 管理界面（主界面 / 检测二级界面 / 删除·设当前·编辑·绑定·清除凭据的 key 选择界面）均显示账号余额**（key 绑定的平台登录凭据经 `getAccountInfoCached` TTL 缓存查询 `platform.senseaudio.cn/api/user/self`，余额按**账号**粒度、所有 key 共享：现金余额显示 `$(coin)/$(error) 充值 ¥X.XX`（> `minBalanceCny` 为 coin、≤ 为 error），代金券可用显示 `$(gift) 赠送 ¥Y.YY`（> 0 时显示，附 `（至 YYYY-MM-DD）` 最早到期日，本地时区格式化），查询失败显示 `$(warning) 余额未知`）。**全部 key 用尽时**：轮换循环跟踪每个 key 的失败原因，报错列出脱敏 key + 原因（如 `sk_****abcd: 服务端繁忙 (503)`），并区分"瞬态失败请稍后重试"（429/503）与"确定性失败请检测"（402/401）；`pickNextApiKey` 无可用 key 的兜底报错同样列出每个 key 的原因（`buildAllKeysUnavailableDetail`）。**瞬态自动重试**：全部 key 均因瞬态错误（默认 429/500/503，状态码可配置 `senseaudio.transientRetryStatusCodes`，与触发轮换的状态码解耦）失败时，按 `senseaudio.transientRetryTimes`（默认 3）自动重试整轮——指数退避等待（2s/4s/8s，上限 8s）且**重试前清空瞬态冷却**（`resetExhaustedKeys(secrets,false)`，否则冷却期间 `pickNextApiKey` 会跳过全部 key 使重试无效），重试次数用尽后才报错。**平台侧错误不换 key**：500 Internal Server Error 是平台问题而非 key 问题——它命中瞬态重试但**不**命中轮换状态码，因此**不标记 key、不换 key**，仅退避后重试同一个 key（日志 `key.transientRetrySameKey`）。**错误分类统一为 `errorRules` 四元组**（2026-10-09）：只配置 `senseaudio.errorRules` 一处（code + message + statusCode + action），`matchErrorRule` 按数组顺序匹配——`code`（错误体 error.code 精确匹配）优先于 `statusCode` 兜底，`message` 仅作说明；`action` 与 key 状态一一对应（`retrySameKey` 状态不变 / `rotateCooldown` 冷却中 / `rotatePersist` 不可用）。默认规则：封号（`code=billing`，400）→ 不可用；上游流中断（`code=upstream_stream_error`，400）→ 不换重试；余额不足（`code=INSUFFICIENT_BALANCE`，402）→ 不可用；限流（429/503）→ 冷却。旧版单 key `senseaudio.apiKey` 自动迁移。`/v1/models` 实测不校验余额（余额 < 0 也 200），模型列表/启动同步用任意有效 key 即可。**key 三元组不随 VS Code 设置同步（2026-10-07 确认）**：SecretStorage 数据被 VS Code Settings Sync 设计上排除（每台机器独立加密，永不同步）——换机器/重装后 key 列表为空；跨机器迁移走下方「云同步（GitHub Gist）」的 `senseaudio.syncPush` / `syncPull`，或手动批量导入重新录入 |
 | **多模型支持** | 内置 16 个模型定义，覆盖 6 大模型系列，统一通过推理强度选择器切换思考模式。支持自动模型发现：开启后从 API 获取模型列表，自动过滤不可用模型并发现新增模型 |
 | **自动模型发现** | 通过 `senseaudio.enableAutoModelDiscovery` 配置（默认开启）。启动时从 `/v1/models` 获取当前可用模型 ID 列表及能力标记（含 `supports_responses`），过滤内置模型列表（不可用模型自动隐藏）。新增模型元数据以 **`/v1/models` 完整元数据为主源**（`context_length` / `max_completion_tokens` / `supports_vision` / `supports_reasoning` / `supports_tools`），models.dev 仅提供友好名称与回退规格——**models.dev 未收录或拉取失败时不再降级为 128K 上下文 / 4096 输出兜底**（2026-09-03 修复：曾导致 glm-5.3-flash 等自动发现模型上下文显示缩水为 102K、4096 输出上限被推理耗尽后正文为空，Copilot Chat 报 "Sorry, no response was returned."）；两源均未知输出上限时不发送 `max_completion_tokens`（交由服务端默认值）。`thinkingMode` 从 `supports_reasoning` 推断（支持推理→switchable，不支持→always）。API 不可用时静默回退到全量内置列表。内存缓存（5 分钟 TTL）。**按 API 模式过滤**：模型列表还会按 `senseaudio.apiMode` 过滤——`auto`/`openai` 显示全部（所有模型均支持 OpenAI 格式），`anthropic` 仅显示 `supports_anthropic=true` 的模型，`responses` 仅显示 `supports_responses=true` 的模型；能力集合为空（API 探测失败）时回退显示全部。**动态刷新**：通过 `onDidChangeLanguageModelChatInformation` 事件（VS Code 1.125+），切换 `apiMode` / `enableAutoModelDiscovery` 设置时自动重新拉取模型列表并刷新选择器，**无需 reload 窗口** |
 | **启动模型同步** | 通过 `senseaudio.syncModelsOnStartup` 配置（默认开启）。每次 VS Code 打开时自动检查 API 是否有新模型，**每日最多同步一次**（`globalState` 记录上次同步日期）。同步结果以**一行日志**输出到「SenseAudio」输出通道（`models.sync` 标签，含状态/说明），**不写任何文件**（v1.7.0 起不再写工作区 `.copilot/model-sync-log.md`——该文件会污染用户仓库，见 issue #1）。无 API Key、API 不可用时记录失败事件且不标记为已同步（下次打开重试） |
@@ -217,18 +217,18 @@ provideLanguageModelChatResponse(model, messages, options, progress, token)
   │       ├── pickNextApiKey(secrets, apiKeyMode)
   │       │   ├── sticky → 从轮询游标环形扫描第一个可用 key，游标钉住不前移（固定使用；失效后切下一个并钉住，不自动切回）
   │       │   ├── rotation → 从轮询游标环形扫描第一个可用 key，游标前移
-  │       │   ├── single → active key；不可用且 singleKeyFallback=switch 且本轮原因为 balance（402，shouldSingleKeyFallbackSwitch 判定）→ 降级 rotation 选下一个可用 key + setActiveKeyByValue 设为当前 + 成功后弹窗提示；其他原因（401/429/503）不切换 → single 专属报错
+  │       │   ├── single → active key；不可用且 singleKeyFallback=switch 且本轮 active key 命中 rotatePersist（shouldSingleKeyFallbackSwitch 判定）→ 降级 rotation 选下一个可用 key + setActiveKeyByValue 设为当前 + 成功后弹窗提示；rotateCooldown 不切换 → single 专属报错
   │       │   └── 全部不可用 → 报错列出脱敏 key+原因（buildAllKeysUnavailableDetail，如 `sk_****abcd: 服务端繁忙 (503)`）
   │       ├── 用当前 key 构造 requestHeaders → executeApiRequest()（见步骤 10 协议分发）
   │       ├── 成功 → break 循环；曾不可用 → 自愈置可用
-  │       └── 失败: isKeyRotationError(err)（状态码 [401]/[402]/[429]/[503] 或文本 patterns 可配置）
-  │           ├── isTransientRetryError(err)（状态码匹配 transientRetryStatusCodes，默认 [429,500,503]，或命中瞬态上游错误签名 upstream_stream_error）→ reason 规范化为瞬态（仅内存冷却不持久化）
-  │           ├── getKeyRotationReason(err) → 402/401 → markApiKeyExhausted(持久化 available=false) + continue 换 key
-  │           ├── 429/503 → markApiKeyExhausted(仅内存冷却，不持久化) + continue 换 key
-  │           ├── 取消/超时/其他错误（400/403/网络/IMAGE_SENSITIVE）→ 抛给外层 catch，不轮换
-  │           ├── **500 等平台侧瞬态错误（命中重试但未命中轮换）→ 不标记 key、不换 key，退避后重试同一 key**
-  │           └── failedKeys.size >= keys.length → 报错：列出脱敏 key+原因；含瞬态(429/503)提示"请稍后重试"，否则提示"用管理命令检测"
-  │               └── 瞬态且未达 transientRetryTimes 上限 → 清空瞬态冷却 + 指数退避等待(2s/4s/8s) + 清空 failedKeys + continue 重试整轮
+  │       └── 失败: matchErrorRule(err)（errorRules 四元组：code 精确匹配优先于 statusCode 兑底）
+  │           ├── action=rotateCooldown → markApiKeyExhausted(仅内存冷却，不持久化) + continue 换 key
+  │           ├── action=rotatePersist → markApiKeyExhausted(持久化 available=false) + continue 换 key
+  │           ├── action=retrySameKey → 不换 key，退避后重试同一个 key（平台侧/客户端侧瞬态问题）
+  │           ├── 取消/超时 → 抛给外层 catch
+  │           ├── 未命中任何规则（403/网络/IMAGE_SENSITIVE）→ 抛给外层 catch，不轮换
+  │           └── failedKeys.size >= keys.length → 报错：列出脱敏 key+原因；含 rotateCooldown 提示"请稍后重试"，否则提示"用管理命令检测"
+  │               └── 含 rotateCooldown 且未达 transientRetryTimes 上限 → 清空瞬态冷却 + 指数退避等待(2s/4s/8s) + 清空 failedKeys + continue 重试整轮
   │
   ├── 10. 根据 apiMode 路由（executeApiRequest）:
   │
@@ -565,8 +565,6 @@ test/                                     # 测试脚本（运行前需 npm run 
 ├── test-cloud-sync-flow.mjs              # 云同步 push/pull 集成测试（22 项断言，mock fetch + mock vscode）
 ├── test-cloud-sync-e2e.mjs               # 云同步真实端到端测试（16 项断言，真实 GitHub Gist + 生产代码，需 gist 权限凭据）
 ├── test-apply-token.mjs                  # 令牌应用测试
-├── test-banned-detect.mjs                # 封号检测测试
-├── test-banned-rotation.mjs              # 封号轮换测试
 ├── test-model-diff.mjs                   # 模型差异测试
 ├── test-responses-recheck.mjs            # Responses 协议复检
 ├── test-vision-check.mjs                 # 视觉能力检查
@@ -602,7 +600,7 @@ test/                                     # 测试脚本（运行前需 npm run 
 | `keys/state.ts` | ~30 | 模块级可变状态：store 缓存、轮询游标、瞬态冷却表（独立成文件避免循环依赖） |
 | `keys/store.ts` | ~194 | SecretStorage 读写与旧版单 key 迁移、`addApiKey`/`addApiKeys`/`removeApiKey`/`setActiveKey`/`setKeyCredential`/`updateApiKey` |
 | `keys/selection.ts` | ~110 | `getPrimaryApiKey` / `pickNextApiKey`（rotation 前移 / sticky 钉住）/ `shouldSingleKeyFallbackSwitch` / `setActiveKeyByValue` |
-| `keys/health.ts` | ~216 | 瞬态冷却（`getTransientExhaustedInfo`）、`isApiKeyEligible`、`isKeyRotationError`、`isTransientRetryError`、`getKeyRotationReason`、`getKeyUnavailableReason`、`markApiKeyExhausted`/`markApiKeyAvailable`/`updateKeyAvailability`/`resetExhaustedKeys`、`getKeyDisplayStatus` |
+| `keys/health.ts` | ~216 | 瞬态冷却（`getTransientExhaustedInfo`）、`isApiKeyEligible`、`matchErrorRule`（errorRules 四元组匹配）、`getKeyUnavailableReason`、`markApiKeyExhausted`（按 action 决定冷却/持久化）/`markApiKeyAvailable`/`updateKeyAvailability`/`resetExhaustedKeys`、`getKeyDisplayStatus` |
 | `keys/mask.ts` | ~18 | `maskApiKey` / `maskCredential` 脱敏 |
 | `balance/balanceCheck.ts` | ~21 | barrel：统一导出 `balance/` 下全部 API |
 | `balance/config.ts` | ~26 | 余额阈值 / TTL 配置读取 + `toNumber`（金额字符串转 number 防御） |
@@ -751,7 +749,7 @@ test/                                     # 测试脚本（运行前需 npm run 
 ### 4.1f `src/provider/rotation.ts`
 
 #### `runKeyRotationLoop(params): Promise<void>`
-多 API Key 轮换循环。每轮选一个 key，跳过余额不足（凭据主动预检）或返回轮换错误（401/402/429/503，状态码与文本 patterns 可配置）的 key。全部 key 用尽时列出脱敏 key + 失败原因；若失败均为瞬态（429/503）则按 `senseaudio.transientRetryTimes` 指数退避重试整轮。**平台侧瞬态错误（500）强制同 key 重试**：`forceKey` 记住当前 key，下一轮强制复用（rotation 模式游标已前移，不强制会静默换 key，违背"500 不换 key"承诺）。**重试计数器按场景分离**：`wholeRoundRetryCount`（全部 key 瞬态失败/无可用 key 整轮重试）与 `sameKeyRetryCount`（500 同 key 重试）独立计数，500 重试不消耗 429/503 整轮配额。single 模式 fallback=switch 时仅在余额不足（402/预检）时切换并经 `setActiveKeyByValue` 设为当前（`onFallbackSwitch` 回调触发通知）。参数：`secrets` / `token` / `abortController` / `execute(apiKey, requestHeaders)` / `customHeaders` / `apiMode` / `onFallbackSwitch`。
+多 API Key 轮换循环。每轮选一个 key，跳过余额不足（凭据主动预检）或返回轮换错误（401/402/429/503，状态码与文本 patterns 可配置）的 key。全部 key 用尽时列出脱敏 key + 失败原因；若失败均为瞬态（429/503）则按 `senseaudio.transientRetryTimes` 指数退避重试整轮。**平台侧瞬态错误（500）强制同 key 重试**：`forceKey` 记住当前 key，下一轮强制复用（rotation 模式游标已前移，不强制会静默换 key，违背"500 不换 key"承诺）。**重试计数器按场景分离**：`wholeRoundRetryCount`（全部 key 瞬态失败/无可用 key 整轮重试）与 `sameKeyRetryCount`（500 同 key 重试）独立计数，500 重试不消耗 429/503 整轮配额。single 模式 fallback=switch 时在 active key 命中 `rotatePersist` 时切换并经 `setActiveKeyByValue` 设为当前（`onFallbackSwitch` 回调触发通知）。参数：`secrets` / `token` / `abortController` / `execute(apiKey, requestHeaders)` / `customHeaders` / `apiMode` / `onFallbackSwitch`。
 
 ---
 
@@ -824,7 +822,7 @@ key 轮换失败原因 → 人类可读标签（l10n key）：`balance`/`invalid
 `ApiKeyEntry` / `ApiKeyStore` / `ApiKeyMode` / `SingleKeyFallback` / `KeyDisplayStatus` 类型定义。
 
 #### `keys/config.ts`
-`getApiKeyMode` / `getRotationCursorIndex` / `getSingleKeyFallback` / `getRotationStatusCodes` / `getRotationErrorPatterns` / `getTransientRetryStatusCodes`（默认 `[429, 500, 503]`）/ `getExhaustedCooldownMin` / `getTransientRetryTimes`。
+`getApiKeyMode` / `getRotationCursorIndex` / `getSingleKeyFallback` / `getErrorRules`（errorRules 四元组）/ `getExhaustedCooldownMin` / `getTransientRetryTimes`。
 
 #### `keys/state.ts`
 模块级可变状态（独立成文件避免循环依赖）：`STORE_KEY` / `LEGACY_KEY` 常量、`getStoreCache`/`setStoreCache`、`getRotationIndex`/`setRotationIndex`、`getTransientExhaustedMap`。
@@ -836,7 +834,7 @@ key 轮换失败原因 → 人类可读标签（l10n key）：`balance`/`invalid
 `getPrimaryApiKey` / `pickNextApiKey`（rotation 前移游标 / sticky 钉住游标）/ `shouldSingleKeyFallbackSwitch` / `setActiveKeyByValue` / `pickAccountCredential`（从 store 选取账号级平台登录凭据：优先当前使用 key，否则第一个绑定了凭据的 key）/ `getAccountCredential`（异步便捷封装）。
 
 #### `keys/health.ts`
-`getTransientExhaustedInfo` / `isApiKeyEligible` / `hasTransientExhaustedKey` / `matchErrorRule`（匹配 `errorRules` 四元组：code 精确匹配优先于 statusCode 兑底）/ `isKeyRotationError`（命中 `rotateCooldown`/`rotatePersist` 时换 key）/ `isTransientRetryError`（命中 `retrySameKey`/`rotateCooldown` 时为瞬态）/ `isTransientExhaustedReason` / `getKeyRotationReason`（返回规则的 `message` 说明）/ `getKeyUnavailableReason` / `markApiKeyExhausted` / `markApiKeyAvailable` / `updateKeyAvailability` / `resetExhaustedKeys` / `getKeyDisplayStatus`。
+`getTransientExhaustedInfo` / `isApiKeyEligible` / `hasTransientExhaustedKey` / `matchErrorRule`（匹配 `errorRules` 四元组：code 精确匹配优先于 statusCode 兑底，返回 `ErrorRule`）/ `getKeyUnavailableReason` / `markApiKeyExhausted`（**按 `action` 决定处置**：`rotateCooldown` 仅冷却 / `rotatePersist` 持久化 available=false）/ `markApiKeyAvailable` / `updateKeyAvailability` / `resetExhaustedKeys` / `getKeyDisplayStatus`。
 #### `keys/mask.ts`
 `maskApiKey` / `maskCredential` 脱敏。
 
@@ -1666,7 +1664,7 @@ Anthropic 请求体。包含 `model`, `messages`, `max_tokens`, `system`, `strea
 静默检查 API Key（经 keyManager.getApiKeyStore），返回 active（或第一个）key 条目；**无任何 key 时静默返回 undefined，不弹输入框**（2026-09-18 移除弹窗引导），由调用方抛出 "SenseAudio API key not found" 错误。
 
 #### `performCommitMsgGeneration(secrets, gitDiff, inputBox, repoPath?): Promise<void>`
-核心生成逻辑。构建 prompt（含自定义提示词、最近提交风格、用户输入、diff 内容），支持 `auto` 语言模式（由模型根据历史 commit 风格自动推断），创建 API 实例，流式输出提交消息到 InputBox。API 协议选择遵循 `senseaudio.apiMode` 设置（`auto` 跟随模型默认，或强制 `openai`/`anthropic`/`responses`；`enableResponsesApi` 关闭时 auto 模式下的 responses 模型回退 openai），并将生效的 apiMode 写回 `selectedModel.apiMode` 以确保 `createMessage()` 构造正确的请求头（anthropic 用 `x-api-key`，openai/responses 用 `Bearer`）。支持通过配置 `senseaudio.commitIncludeCommitDiff` 控制风格参考中是否包含历史提交的实际代码变更（默认关闭）。支持通过配置 `senseaudio.commitAttachContextFiles`（默认开启）控制是否将仓库根目录的 `AGENTS.md` 和 `README.md` 内容附加到 prompt 中作为额外上下文。**多 key 轮换循环**：生成器消费包 while 循环，`pickNextApiKey` → `createMessage` 流式消费；`failedKeys` 跟踪每个 key 失败原因，全部 key 用尽时（`failedKeys.size >= totalKeys`）报错列出脱敏 key+原因并区分瞬态（429/503→"请稍后重试"）与确定性（→"用管理命令检测"）；轮换错误换 key 重试（若已产生部分输出则不换 key，避免覆盖 InputBox 内容；轮换原因经 `getKeyRotationReason` 提取，修复了原固定 `api_error` 导致 429/503 被持久化为不可用的 bug）；`pickNextApiKey` 无可用 key 的兜底报错同样列出每个 key 的原因（`buildAllKeysUnavailableDetail`）；single 模式的 fallback=switch 同样仅在余额不足（402）时切换并经 `setActiveKeyByValue` 设为当前（`shouldSingleKeyFallbackSwitch` 判定），其他错误不切换、走 single 专属报错文案；成功后若该 key 曾被标记不可用则自愈置可用（`markApiKeyAvailable`，与 `provider/rotation.ts` 一致）；用户取消立即中止。
+核心生成逻辑。构建 prompt（含自定义提示词、最近提交风格、用户输入、diff 内容），支持 `auto` 语言模式（由模型根据历史 commit 风格自动推断），创建 API 实例，流式输出提交消息到 InputBox。API 协议选择遵循 `senseaudio.apiMode` 设置（`auto` 跟随模型默认，或强制 `openai`/`anthropic`/`responses`；`enableResponsesApi` 关闭时 auto 模式下的 responses 模型回退 openai），并将生效的 apiMode 写回 `selectedModel.apiMode` 以确保 `createMessage()` 构造正确的请求头（anthropic 用 `x-api-key`，openai/responses 用 `Bearer`）。支持通过配置 `senseaudio.commitIncludeCommitDiff` 控制风格参考中是否包含历史提交的实际代码变更（默认关闭）。支持通过配置 `senseaudio.commitAttachContextFiles`（默认开启）控制是否将仓库根目录的 `AGENTS.md` 和 `README.md` 内容附加到 prompt 中作为额外上下文。**多 key 轮换循环**：生成器消费包 while 循环，`pickNextApiKey` → `createMessage` 流式消费；`failedKeys` 跟踪每个 key 命中的 `ErrorRule`，全部 key 用尽时（`failedKeys.size >= totalKeys`）报错列出脱敏 key+原因并区分瞬态（`rotateCooldown`→"请稍后重试"）与确定性（`rotatePersist`→"用管理命令检测"）；轮换错误换 key 重试（若已产生部分输出则不换 key，避免覆盖 InputBox 内容）；`pickNextApiKey` 无可用 key 的兜底报错同样列出每个 key 的原因（`buildAllKeysUnavailableDetail`）；single 模式的 fallback=switch 在 active key 命中 `rotatePersist` 时切换并经 `setActiveKeyByValue` 设为当前（`shouldSingleKeyFallbackSwitch` 判定），`rotateCooldown` 不切换、走 single 专属报错文案；成功后若该 key 曾被标记不可用则自愈置可用（`markApiKeyAvailable`，与 `provider/rotation.ts` 一致）；用户取消立即中止。
 
 #### `abortCommitGeneration(): void`
 中止提交消息生成。

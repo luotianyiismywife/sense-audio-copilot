@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { getApiKeyMode } from "./config";
+import type { ErrorRule } from "./config";
 import { isApiKeyEligible } from "./health";
 import { getRotationIndex, setRotationIndex } from "./state";
 import { getApiKeyStore, saveApiKeyStore } from "./store";
@@ -79,28 +80,29 @@ export async function pickNextApiKey(
 
 /**
  * single 模式（fallback=switch）下是否应因当前 key 不可用而自动切换。
- * 仅当**本轮请求**中当前 active key 因“余额不足”失败（`failedKeys` 记录的 reason ===
- * "balance"，来源：402 轮换错误或余额预检不足）时返回 true：
- * - balance（402）：确定性失败，换一个有余额的 key 即可继续 → 切换
- * - invalid（401）：key 配置问题，应报错交由用户处理 → 不切换
- * - rate_limited / server_error（429/503）：瞬态错误，换 key 规避不了平台限流/繁忙，
+ * 仅当**本轮请求**中当前 active key 命中 `rotatePersist` 规则（确定性失败：
+ * 余额不足 / 无效 key / 封号）时返回 true：
+ * - `rotatePersist`：确定性失败，换一个可用 key 即可继续 → 切换
+ * - `rotateCooldown`（429/503）：瞬态错误，换 key 规避不了平台限流/繁忙，
  *   由瞬态整轮重试兜底 → 不切换
  *
  * 本轮 `failedKeys` 无记录（请求开始时 active key 已因**历史**请求处于不可用/冷却状态）
- * 时不切换：上次 402 切换成功时 activeIndex 已随 `setActiveKeyByValue` 移到新 key，
+ * 时不切换：上次切换成功时 activeIndex 已随 `setActiveKeyByValue` 移到新 key，
  * 不会再走到这里；剩余场景（error 模式遗留、上次切换失败）直接报错更符合 single 模式
  * “严格使用当前 key”的语义。
  */
 export async function shouldSingleKeyFallbackSwitch(
     secrets: vscode.SecretStorage,
-    currentRequestFailures: ReadonlyMap<string, string>
+    currentRequestFailures: ReadonlyMap<string, ErrorRule>
 ): Promise<boolean> {
     const store = await getApiKeyStore(secrets);
     const active = store.keys[store.activeIndex] ?? store.keys[0];
     if (!active) {
         return false;
     }
-    return currentRequestFailures.get(active.value) === "balance";
+    // 本轮 active key 命中 `rotatePersist`（确定性失败：余额不足 / 无效 key / 封号）
+    // 时切换；`rotateCooldown`（瞬态）由整轮重试兜底，不切换。
+    return currentRequestFailures.get(active.value)?.action === "rotatePersist";
 }
 
 /**

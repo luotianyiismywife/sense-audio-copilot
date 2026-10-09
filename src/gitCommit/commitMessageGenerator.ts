@@ -24,8 +24,9 @@ import {
     setActiveKeyByValue,
     shouldSingleKeyFallbackSwitch,
     type ApiKeyEntry,
+    type ErrorRule,
 } from "../keys/keyManager";
-import { buildAllKeysUnavailableDetail, REASON_TEXT, tryTransientRetryRound } from "../provider/provider";
+import { buildAllKeysUnavailableDetail, tryTransientRetryRound } from "../provider/provider";
 
 /**
  * Git commit message generator module.
@@ -305,10 +306,11 @@ async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff
         const apiKeyMode = getApiKeyMode();
         const singleFallback = getSingleKeyFallback();
         let response = "";
-        // Track per-key failure reasons so the "all keys exhausted" error can
+        // Track per-key failure rules so the "all keys exhausted" error can
         // show which key failed and why (masked), and distinguish transient
-        // failures (429/503 — retry later) from permanent ones (402/401 — check).
-        const failedKeys = new Map<string, string>();
+        // failures (rotateCooldown — retry later) from permanent ones
+        // (rotatePersist — check).
+        const failedKeys = new Map<string, ErrorRule>();
         const totalKeys = (await getApiKeyStore(secrets)).keys.length;
         // Transient (429/503) whole-round auto-retry: when every key is busy or
         // rate-limited, wait with backoff and retry the whole round instead of
@@ -329,9 +331,9 @@ async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff
             // If every key has failed at least one round, stop trying.
             if (totalKeys > 0 && failedKeys.size >= totalKeys) {
                 const detail = [...failedKeys.entries()]
-                    .map(([key, reason]) => `${maskApiKey(key)}: ${l10n(REASON_TEXT[reason] ?? reason)}`)
+                    .map(([key, rule]) => `${maskApiKey(key)}: ${rule.message ?? rule.code ?? ""}`)
                     .join("; ");
-                const hasTransient = [...failedKeys.values()].some((r) => r === "rate_limited" || r === "server_error");
+                const hasTransient = [...failedKeys.values()].some((r) => r.action === "rotateCooldown");
                 // Platform busy / rate-limited: back off and retry the whole
                 // round automatically instead of failing immediately.
                 if (hasTransient && (await tryTransientRetryRound(secrets, wholeRoundRetryCount, maxTransientRetries))) {
@@ -431,16 +433,17 @@ async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff
                 if (response.length > 0) {
                     throw err;
                 }
-                                // 错误分类（errorRules 四元组：code + message + statusCode + action）
+                // 错误分类（errorRules 四元组：code + message + statusCode + action）
                 const rule = matchErrorRule(err);
                 if (rule?.action === "rotateCooldown" || rule?.action === "rotatePersist") {
                     // 换 key（冷却或持久化失效，由 action 决定）
                     const reason = rule.message ?? rule.code ?? "";
-                    failedKeys.set(entry.value, reason);
-                    await markApiKeyExhausted(secrets, entry.value, reason);
+                    failedKeys.set(entry.value, rule);
+                    await markApiKeyExhausted(secrets, entry.value, reason, rule.action);
                     logger.warn("commit.key.rotation", {
                         key: entry.value.slice(0, 6) + "****",
                         reason,
+                        action: rule.action,
                         error: err instanceof Error ? err.message : String(err),
                     });
                     continue; // try next key
