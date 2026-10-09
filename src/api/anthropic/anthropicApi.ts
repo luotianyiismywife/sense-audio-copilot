@@ -154,12 +154,6 @@ export class AnthropicApi extends CommonApi<AnthropicMessage, AnthropicRequestBo
 			const joinedText = textParts.join("").trim();
 			const joinedThinking = thinkingParts.join("").trim();
 
-			// Restore persisted vision calls before the normal content of this
-			// message, preserving assistant tool_use → user tool_result order.
-			for (const entry of visionToolHistory) {
-				out.push(...toAnthropicVisionToolMessages(entry));
-			}
-
 			// Handle system messages separately (Anthropic uses top-level system field)
 			if (role === "system") {
 				if (joinedText) {
@@ -181,8 +175,17 @@ export class AnthropicApi extends CommonApi<AnthropicMessage, AnthropicRequestBo
 				continue;
 			}
 
-			// Flush buffered tool results before emitting any other message type
+			// Flush buffered tool results before emitting any other message type.
+			// MUST run before the vision-history push below: the buffered results
+			// answer an EARLIER assistant tool_use, so they belong before this
+			// message's restored vision tool_use/tool_result pair.
 			flushPendingToolResults();
+
+			// Restore persisted vision calls before the normal content of this
+			// message, preserving assistant tool_use → user tool_result order.
+			for (const entry of visionToolHistory) {
+				out.push(...toAnthropicVisionToolMessages(entry));
+			}
 
 			// Build content blocks for user/assistant messages
 			const contentBlocks: AnthropicContentBlock[] = [];

@@ -38,12 +38,6 @@ export abstract class CommonApi<TMessage, TRequestBody> {
     /** Track if we emitted any assistant text before seeing tool calls (SSE-like begin-tool-calls hint). */
     protected _hasEmittedAssistantText = false;
 
-    /** Track if we emitted any text. */
-    protected _hasEmittedText = false;
-
-    /** Track if we emitted any thinking text. */
-    protected _hasEmittedThinking = false;
-
     /** Finish/stop reason of the most recent stream (e.g. "length", "max_tokens"),
      *  used to detect budget exhaustion with zero answer text. */
     protected _lastFinishReason: string | undefined;
@@ -59,7 +53,6 @@ export abstract class CommonApi<TMessage, TRequestBody> {
 
     // XML think block parsing state
     protected _xmlThinkActive = false;
-    protected _xmlThinkDetectionAttempted = false;
 
     // Thinking content state management
     protected _currentThinkingId: string | null = null;
@@ -305,12 +298,9 @@ export abstract class CommonApi<TMessage, TRequestBody> {
         this._toolCallBuffers.clear();
         this._completedToolCallIndices.clear();
         this._hasEmittedAssistantText = false;
-        this._hasEmittedText = false;
-        this._hasEmittedThinking = false;
         this._lastFinishReason = undefined;
         this._emittedBeginToolCallsHint = false;
         this._xmlThinkActive = false;
-        this._xmlThinkDetectionAttempted = false;
         this._currentThinkingId = null;
         this._thinkingBuffer = "";
         if (this._thinkingFlushTimer) {
@@ -355,7 +345,6 @@ export abstract class CommonApi<TMessage, TRequestBody> {
      * @param progress Progress reporter for parts
      */
     protected bufferThinkingContent(text: string, progress: Progress<LanguageModelResponsePart>): void {
-        this._hasEmittedThinking = true;
         if (!this._currentThinkingId) {
             this._currentThinkingId = this.generateThinkingId();
         }
@@ -403,7 +392,7 @@ export abstract class CommonApi<TMessage, TRequestBody> {
             return { emittedAny: false };
         }
 
-        this._xmlThinkDetectionAttempted = true;
+
         let remaining = content;
         let emittedAny = false;
 

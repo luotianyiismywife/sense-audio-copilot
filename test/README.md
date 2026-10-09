@@ -17,6 +17,8 @@
 | `test-vision-history.mjs` | 离线 | 跨轮视觉历史编解码 + 双 API 转换器闭环（含 DeepSeek 空 reasoning_content 回归） |
 | `test-anthropic-tool-result-merge.mjs` | 离线 | Anthropic 连续工具结果合并（issue #87：3 个并行 tool_use 结果合并为单条 user 消息） |
 | `test-anthropic-image-index.mjs` | 离线 | **Anthropic 图片索引顺序**（3 项断言）：图片索引按 part 顺序内联分配，与 `collectLocalImages` 存储顺序一致（回归：曾延迟分配导致混排时索引错位） |
+| `test-anthropic-vision-order.mjs` | 离线 | **Anthropic 视觉历史顺序**（2 项断言）：缓冲的工具结果先于视觉历史输出，视觉 tool_use 紧跟其 tool_result（回归：曾先推视觉历史导致顺序颠倒） |
+| `test-image-dimensions.mjs` | 离线 | **图片尺寸解析**（5 项断言）：PNG / GIF / JPEG / WebP 尺寸解析（回归：PNG 签名检测错误导致返回 unknown） |
 | `test-batch-import.mjs` | 离线 | **批量导入解析器**（14 项断言）：`key---credential---备注;` 格式、空字段、备注含分隔符、容错 |
 | `test-cloud-sync-auto-push.mjs` | 离线 | **云同步 payload 去重**（18 项断言）：`syncPayloadHasChanged` 空值/版本/长度/逐字段/顺序分支，`undefined` 与 `""` 等价、`updatedAt` 不参与比较、旧字段名 `cookie` 兼容 |
 | `test-cloud-sync-flow.mjs` | 离线 | **云同步 push/pull 集成**（22 项断言）：mock fetch + mock vscode 驱动生产 `pushToCloud`/`pullFromCloud`（新建/PATCH/短路/合并/静默/缓存失效回退/服务端时间戳回归） |
@@ -35,6 +37,8 @@ node test/test-transient-retry.mjs
 node test/test-vision-history.mjs
 node test/test-anthropic-tool-result-merge.mjs
 node test/test-anthropic-image-index.mjs
+node test/test-anthropic-vision-order.mjs
+node test/test-image-dimensions.mjs
 node test/test-batch-import.mjs
 node test/test-cloud-sync-auto-push.mjs
 node test/test-cloud-sync-flow.mjs

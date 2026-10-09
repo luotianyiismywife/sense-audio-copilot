@@ -18,9 +18,12 @@ const FALLBACK_TEST_MODEL_ID = "deepseek-v4.1-flash";
  * from the cached /v1/models list (always current), fall back to a hardcoded
  * ID when the list is unavailable. The hardcoded value has broken twice when
  * the platform retired models, so the live list is preferred.
+ *
+ * @param apiKey 用于拉取 /v1/models（传 undefined 时 `ensureApiModelCache` 直接
+ *   返回不拉取，缓存冷时永远只能回退硬编码值——必须传真实 key）。
  */
-async function pickTestModelId(): Promise<string> {
-    const ids = await getApiModelIds(undefined);
+async function pickTestModelId(apiKey: string): Promise<string> {
+    const ids = await getApiModelIds(apiKey);
     return ids.values().next().value ?? FALLBACK_TEST_MODEL_ID;
 }
 
@@ -44,7 +47,7 @@ export async function testKeyAvailability(
         const url = normalized.endsWith("/v1")
             ? `${normalized}/chat/completions`
             : `${normalized}/v1/chat/completions`;
-        const testModelId = await pickTestModelId();
+        const testModelId = await pickTestModelId(entry.value);
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
         try {

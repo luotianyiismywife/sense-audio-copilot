@@ -19,7 +19,9 @@ export function getImageDimensions(base64: string) {
 }
 
 function getMimeType(base64: string): string {
-    // Read first few bytes to determine image type
+    // Read first few bytes to determine image type.
+    // `atob` returns a binary string where each char code is one byte, so the
+    // signature checks below operate on DECODED bytes (not base64 chars).
     const header = atob(base64.slice(0, 20));
     if (header.startsWith("ÿØÿà") || header.startsWith("ÿØÿá") || header.startsWith("ÿØÿâ")) {
         return "image/jpeg";
@@ -30,13 +32,8 @@ function getMimeType(base64: string): string {
     if (header.startsWith("GIF87a") || header.startsWith("GIF89a")) {
         return "image/gif";
     }
-    // Default assume PNG (PNG signatures start with byte 137 'PNG'...)
-    // atob of the first few bytes will contain the PNG signature
-    const uint8 = new Uint8Array(base64.length);
-    for (let i = 0; i < base64.length; i++) {
-        uint8[i] = base64.charCodeAt(i);
-    }
-    if (uint8[0] === 0x89 && uint8[1] === 0x50 && uint8[2] === 0x4e && uint8[3] === 0x47) {
+    // PNG signature: 0x89 'P' 'N' 'G' (decoded bytes).
+    if (header.charCodeAt(0) === 0x89 && header.slice(1, 4) === "PNG") {
         return "image/png";
     }
     return "unknown";

@@ -566,6 +566,8 @@ test/                                     # 测试脚本（运行前需 npm run 
 ├── test-vision-history.mjs               # 跨轮视觉历史编解码 + 双 API 转换器闭环测试
 ├── test-anthropic-tool-result-merge.mjs  # Anthropic 连续工具结果合并测试（issue #87 场景）
 ├── test-anthropic-image-index.mjs        # Anthropic 图片索引顺序测试（3 项断言，回归：延迟分配导致索引错位）
+├── test-anthropic-vision-order.mjs       # Anthropic 视觉历史顺序测试（2 项断言，回归：先推视觉历史导致顺序颠倒）
+├── test-image-dimensions.mjs             # 图片尺寸解析测试（5 项断言，回归：PNG 签名检测错误）
 ├── test-batch-import.mjs                 # 批量导入解析器测试（14 项断言）
 ├── test-cloud-sync-auto-push.mjs         # 云同步 payload 去重测试（18 项断言，纯函数无 vscode 依赖）
 ├── test-cloud-sync-flow.mjs              # 云同步 push/pull 集成测试（22 项断言，mock fetch + mock vscode）
@@ -656,6 +658,8 @@ test/                                     # 测试脚本（运行前需 npm run 
 | `test/test-vision-history.mjs` | ~155 | 跨轮视觉历史编解码 + 双 API 转换器闭环测试（源自上游 opencode-go-copilot v1.9.2，含 DeepSeek 空 reasoning_content 回归用例；运行前需 `npm run compile`） |
 | `test/test-anthropic-tool-result-merge.mjs` | ~168 | Anthropic 连续工具结果合并测试（源自上游，issue #87 场景：3 个并行 tool_use 结果合并为单条 user 消息；运行前需 `npm run compile`） |
 | `test/test-anthropic-image-index.mjs` | ~120 | **Anthropic 图片索引顺序测试**（3 项断言）：图片索引按 part 顺序内联分配，与 `collectLocalImages` 存储顺序一致（回归：曾延迟分配导致同一消息内混排 image DataPart 与文本 data-URI 图片时索引错位）；运行前需 `npm run compile` |
+| `test/test-anthropic-vision-order.mjs` | ~150 | **Anthropic 视觉历史顺序测试**（2 项断言）：缓冲的工具结果先于视觉历史输出，视觉 tool_use 紧跟其 tool_result（回归：曾先推视觉历史导致顺序颠倒）；运行前需 `npm run compile` |
+| `test/test-image-dimensions.mjs` | ~60 | **图片尺寸解析测试**（5 项断言）：PNG / GIF / JPEG / WebP 尺寸解析（回归：PNG 签名检测错误导致返回 unknown）；运行前需 `npm run compile` |
 | `test/test-cloud-sync-auto-push.mjs` | ~90 | **云同步 payload 去重测试**（18 项断言）：`syncPayloadHasChanged` 的空值/版本/长度/逐字段（value/credential/label）/顺序分支，以及 `undefined` 与 `""` 等价、`updatedAt` 不参与比较、**旧字段名 `cookie` 与 `credential` 等价（向后兼容）**；纯函数无 `vscode` 依赖，运行前需 `npm run compile` |
 | `test/test-cloud-sync-flow.mjs` | ~330 | **云同步 push/pull 集成测试**（22 项断言）：通过 `Module._load` 钩子注入 `vscode` mock + mock `fetch`，驱动真实 `pushToCloud`/`pullFromCloud` 流程——push 新建/PATCH/无变更短路/空 store 警告、**push 记录服务端 `updated_at`（回归：曾记录客户端时间导致 push 后必然多拉一次）**、pull 合并（credential/label 覆盖 + 可用性保留 + 追加新 key）/静默跳过/缓存 gist 失效回退；运行前需 `npm run compile` |
 | `test/test-cloud-sync-e2e.mjs` | ~250 | **云同步真实端到端测试**（16 项断言，`npm run test:e2e`）：用**真实 GitHub Gist API** 驱动生产 `pushToCloud`/`pullFromCloud`，验证 mock 无法覆盖的部分（真实请求体格式/响应结构/`updated_at`/内容往返）。安全设计：创建**专用测试 Gist**（描述带随机后缀）并预置其 id 到 `globalState`，**绝不触碰用户真实同步 Gist**；finally 中删除测试 Gist。凭据从 `GITHUB_TOKEN`/`GH_TOKEN` 或 `gh auth token` 读取，无凭据时 SKIP 退出 0；运行前需 `npm run compile` |
@@ -1032,12 +1036,9 @@ API 实现的抽象基类。
 | `_toolCallBuffers` | `Map<number, {id?, name?, args}>` | 工具调用参数缓冲区 |
 | `_completedToolCallIndices` | `Set<number>` | 已完成发射的工具调用索引 |
 | `_hasEmittedAssistantText` | `boolean` | 是否已发射过助手文本 |
-| `_hasEmittedText` | `boolean` | 是否已发射过文本 |
-| `_hasEmittedThinking` | `boolean` | 是否已发射过推理内容 |
 | `_emittedBeginToolCallsHint` | `boolean` | 是否已发射工具调用前导空格 |
 | `_lastFinishReason` | `string \| undefined` | 最近一次流的结束原因（`length`/`max_tokens`/`stop`/`tool_calls` 等），供 `checkZeroAnswerBudgetExhausted` 零正文预算耗尽检测使用；经 `lastFinishReason` 公共 getter 暴露 |
 | `_xmlThinkActive` | `boolean` | XML think 块解析中 |
-| `_xmlThinkDetectionAttempted` | `boolean` | 是否尝试过 XML think 检测 |
 | `_currentThinkingId` | `string \| null` | 当前推理内容 ID |
 | `_thinkingBuffer` | `string` | 推理内容缓冲区 |
 | `_thinkingFlushTimer` | `NodeJS.Timeout \| null` | 推理刷新定时器 |
