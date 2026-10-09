@@ -78,13 +78,15 @@ async function refreshPlanUsage(): Promise<void> {
     if (usageRefreshInFlight || !usageCredentialProvider) {
         return;
     }
-    const token = await usageCredentialProvider();
-    if (!token) {
-        logger.debug("planUsage.poll.skip", { reason: "no-credential" });
-        return;
-    }
+    // 先置 in-flight 标志再 await（否则两个并发调用都能通过上面的检查，
+    // 各自 await 后都置标志并重复发起请求）。
     usageRefreshInFlight = true;
     try {
+        const token = await usageCredentialProvider();
+        if (!token) {
+            logger.debug("planUsage.poll.skip", { reason: "no-credential" });
+            return;
+        }
         const snapshot = await getPlanUsageCached(token);
         if (snapshot && usageStatusBarItem) {
             updateStatusBarUsageText(usageStatusBarItem);
@@ -125,17 +127,18 @@ function startUsagePolling(): void {
  * by clicking the status bar item) and re-render once fresh data arrives.
  */
 export async function refreshPlanUsageNow(): Promise<PlanUsageSnapshot | null> {
-    const token = await usageCredentialProvider?.();
-    if (!token) {
-        return null;
-    }
     // 并发保护：后台刷新在途时不重复发起（避免穿透 in-flight 标志形成并发请求），
     // 直接返回当前缓存快照。
     if (usageRefreshInFlight) {
         return getPlanUsageSnapshot();
     }
+    // 先置 in-flight 标志再 await（否则两个并发调用都能通过上面的检查）。
     usageRefreshInFlight = true;
     try {
+        const token = await usageCredentialProvider?.();
+        if (!token) {
+            return null;
+        }
         const snapshot = await getPlanUsageCached(token, true);
         if (usageStatusBarItem) {
             updateStatusBarUsageText(usageStatusBarItem);

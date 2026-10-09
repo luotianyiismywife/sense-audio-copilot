@@ -6,6 +6,20 @@ import type { CommonApi, StreamUsage } from "../api/commonApi";
 import { getApiKeyStore, getKeyUnavailableReason, maskApiKey, resetExhaustedKeys } from "../keys/keyManager";
 
 /**
+ * 视觉代理轮内失败标记错误。
+ *
+ * 主请求已成功、tool 上下文已建立，此时换 key 重跑整个请求会导致**主回答重复输出**
+ * 并浪费 token。轮换循环（`rotation.ts`）识别此类型后**直接抛出、不轮换 key**，
+ * 由用户重试整个请求。
+ */
+export class VisionRoundError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = "VisionRoundError";
+    }
+}
+
+/**
  * Detect a finished stream that exhausted its token budget (finish/stop reason
  * "length" or "max_tokens") without producing any answer text. This happens
  * with reasoning models when thinking consumes the whole max_tokens budget

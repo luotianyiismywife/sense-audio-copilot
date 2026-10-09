@@ -19,7 +19,7 @@ import {
     type ApiKeyEntry,
     type ErrorRule,
 } from "../keys/keyManager";
-import { buildAllKeysUnavailableDetail, tryTransientRetryRound } from "./errors";
+import { buildAllKeysUnavailableDetail, tryTransientRetryRound, VisionRoundError } from "./errors";
 
 /**
  * 多 API Key 轮换循环。
@@ -191,6 +191,15 @@ export async function runKeyRotationLoop(params: RotationLoopParams): Promise<vo
             }
             if (abortController.signal.aborted) {
                 throw err; // timeout (outer catch shows friendly message)
+            }
+            // 视觉代理轮内失败：主请求已成功、tool 上下文已建立，换 key 重跑整个
+            // 请求会导致主回答重复输出。直接抛出，不轮换 key（由用户重试整个请求）。
+            if (err instanceof VisionRoundError) {
+                logger.warn("key.visionRoundFailed", {
+                    key: maskApiKey(currentEntry.value),
+                    error: err.message,
+                });
+                throw err;
             }
             // 错误分类（errorRules 四元组：code + message + statusCode + action）
             const rule = matchErrorRule(err);

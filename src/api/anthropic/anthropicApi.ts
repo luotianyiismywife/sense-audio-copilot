@@ -82,7 +82,10 @@ export class AnthropicApi extends CommonApi<AnthropicMessage, AnthropicRequestBo
 		for (const m of messages) {
 			const role = mapRole(m);
 			const textParts: string[] = [];
-			const imageParts: vscode.LanguageModelDataPart[] = [];
+			// 图片索引必须**按 part 顺序内联分配**，与 `collectLocalImages` 的存储顺序
+			// 一致（否则同一消息内混排 image DataPart 与文本 data-URI 图片时索引错位，
+			// 模型问"图 N"却拿到另一张图）。
+			const imageParts: { part: vscode.LanguageModelDataPart; index: number }[] = [];
 			const toolCalls: AnthropicToolUseBlock[] = [];
 			const toolResults: AnthropicToolResultBlock[] = [];
 			const thinkingParts: string[] = [];
@@ -101,7 +104,13 @@ export class AnthropicApi extends CommonApi<AnthropicMessage, AnthropicRequestBo
 						textParts.push(result.text);
 					}
 				} else if (part instanceof vscode.LanguageModelDataPart && isImageMimeType(part.mimeType)) {
-					imageParts.push(part);
+					if (modelSupportsVision) {
+						imageParts.push({ part, index: -1 });
+					} else {
+						// 非视觉模型：内联分配索引（与 collectLocalImages 顺序一致）
+						imageParts.push({ part, index: imageIndex });
+						imageIndex++;
+					}
 				} else if (part instanceof vscode.LanguageModelToolCallPart) {
 					const id = part.callId || `toolu_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 					toolCalls.push({
@@ -188,7 +197,7 @@ export class AnthropicApi extends CommonApi<AnthropicMessage, AnthropicRequestBo
 
 			if (modelSupportsVision) {
 				// Add image content (vision model)
-				for (const imagePart of imageParts) {
+				for (const { part: imagePart } of imageParts) {
 					const base64Data = Buffer.from(imagePart.data).toString("base64");
 					contentBlocks.push({
 						type: "image",
@@ -201,12 +210,12 @@ export class AnthropicApi extends CommonApi<AnthropicMessage, AnthropicRequestBo
 				}
 			} else {
 				// Non-vision model: add text references for stored images
-				for (let i = 0; i < imageParts.length; i++) {
+				// (indices were assigned inline in part order above)
+				for (const { index } of imageParts) {
 					contentBlocks.push({
 						type: "text",
-						text: buildUserImageReference(imageIndex),
+						text: buildUserImageReference(index),
 					});
-					imageIndex++;
 				}
 			}
 

@@ -20,6 +20,7 @@ import {
 } from "../vision/types";
 import { createVisionToolHistoryPart } from "../vision/historyPart";
 import type { VisionToolHistoryEntry } from "../vision/historyCodec";
+import { VisionRoundError } from "./errors";
 
 /**
  * 图片代理（ask_image）多轮处理。
@@ -220,6 +221,12 @@ export async function handleInterceptedToolCall(params: VisionRoundParams): Prom
             } else {
                 await runOpenAIRound(params, api, currentMessages, intercepted, description, hasLocalImages, roundAbortController);
             }
+        } catch (err) {
+            // 视觉代理轮内失败：主请求已成功、tool 上下文已建立，换 key 重跑整个
+            // 请求会导致主回答重复输出。用 VisionRoundError 标记，让轮换循环直接
+            // 抛出、不轮换 key（由用户重试整个请求）。
+            const msg = err instanceof Error ? err.message : String(err);
+            throw new VisionRoundError(msg);
         } finally {
             clearTimeout(roundTimeoutId);
             cancelDisposable?.dispose();

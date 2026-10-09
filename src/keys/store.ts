@@ -73,12 +73,41 @@ export async function getApiKeyStore(secrets: vscode.SecretStorage): Promise<Api
     // Another window may have written to SecretStorage (e.g. cloud sync pull);
     // invalidate the in-memory cache so the next read picks up the fresh data.
     // (SecretStorage has no change event, so polling on each read is the only way.)
+    //
+    // 用**语义比较**而非字符串比较：归一化会重排字段顺序（如云同步写入的
+    // `value, credential, label` vs 归一化的 `value, label, credential`），
+    // 字符串比较会永远不相等 → 缓存被永久禁用（每次读取都访问 SecretStorage）。
     void secrets.get(STORE_KEY).then((fresh) => {
-        if (fresh && fresh !== JSON.stringify(store)) {
+        if (fresh && !storeMatchesRaw(fresh, store)) {
             invalidateApiKeyStoreCache();
         }
     });
     return store;
+}
+
+/** 语义比较：SecretStorage 原始字符串与内存 store 是否等价（忽略字段顺序）。 */
+function storeMatchesRaw(raw: string, store: ApiKeyStore): boolean {
+    try {
+        const parsed = JSON.parse(raw) as Partial<ApiKeyStore>;
+        if (!Array.isArray(parsed.keys) || parsed.keys.length !== store.keys.length) {
+            return false;
+        }
+        if ((parsed.activeIndex ?? 0) !== store.activeIndex) {
+            return false;
+        }
+        return parsed.keys.every((k, i) => {
+            const s = store.keys[i];
+            return (
+                k.value === s.value &&
+                (k.label ?? undefined) === (s.label ?? undefined) &&
+                ((k.credential ?? (k as { cookie?: string }).cookie) ?? undefined) === (s.credential ?? undefined) &&
+                (k.available ?? null) === (s.available ?? null) &&
+                (k.lastCheckedAt ?? undefined) === (s.lastCheckedAt ?? undefined)
+            );
+        });
+    } catch {
+        return false;
+    }
 }
 
 /**
@@ -226,6 +255,10 @@ export async function updateApiKey(
         const newValue = fields.value.trim();
         if (newValue !== entry.value && store.keys.some((k) => k.value === newValue)) {
             return { ok: false, conflict: true }; // 与其他 key 冲突
+        }
+        if (newValue !== entry.value) {
+            // 清理旧值的瞬态冷却条目（避免内存残留；新值不应继承旧冷却）
+            getTransientExhaustedMap().delete(entry.value);
         }
         entry.value = newValue;
     }

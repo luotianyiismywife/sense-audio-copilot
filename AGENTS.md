@@ -565,6 +565,7 @@ test/                                     # 测试脚本（运行前需 npm run 
 ├── test-transient-retry.mjs              # 错误分类规则测试（15 项断言，errorRules 四元组：code 优先 + statusCode 兑底 + action 分派）
 ├── test-vision-history.mjs               # 跨轮视觉历史编解码 + 双 API 转换器闭环测试
 ├── test-anthropic-tool-result-merge.mjs  # Anthropic 连续工具结果合并测试（issue #87 场景）
+├── test-anthropic-image-index.mjs        # Anthropic 图片索引顺序测试（3 项断言，回归：延迟分配导致索引错位）
 ├── test-batch-import.mjs                 # 批量导入解析器测试（14 项断言）
 ├── test-cloud-sync-auto-push.mjs         # 云同步 payload 去重测试（18 项断言，纯函数无 vscode 依赖）
 ├── test-cloud-sync-flow.mjs              # 云同步 push/pull 集成测试（22 项断言，mock fetch + mock vscode）
@@ -591,10 +592,10 @@ test/                                     # 测试脚本（运行前需 npm run 
 | `api/responses/responsesTypes.ts` | ~117 | Responses 类型定义 |
 | `provider/provider.ts` | ~341 | `SenseAudioChatModelProvider`：VS Code 接口实现（`provideLanguageModelChatInformation` / `provideTokenCount` / `provideLanguageModelChatResponse`）+ 请求编排（模型配置解析、延迟、超时、取消、错误分类、状态栏生命周期）。具体逻辑委托给同目录模块 |
 | `provider/requestOptions.ts` | ~106 | 请求参数决策：`applyReasoningEffort()`（thinking 模式）、`applyTemperature()`（预设/自定义/fixedTopP）、`resolveApiMode()`（auto 模式能力探测） |
-| `provider/rotation.ts` | ~196 | `runKeyRotationLoop()`：多 key 轮换循环（选 key → 执行 → 轮换错误换 key / 瞬态整轮退避重试 / 全部失败报错列脱敏原因） |
+| `provider/rotation.ts` | ~196 | `runKeyRotationLoop()`：多 key 轮换循环（选 key → 执行 → 轮换错误换 key / 瞬态整轮退避重试 / 全部失败报错列脱敏原因）；**`VisionRoundError` 直接抛出、不轮换**（视觉代理轮内失败，换 key 会重复输出主回答） |
 | `provider/apiDispatch.ts` | ~221 | `executeApiRequest()`：三协议分发（openai/anthropic/responses）、请求体构建、`executeWithRetry`、流式处理、零正文预算耗尽检测、视觉代理后续轮次触发 |
-| `provider/visionRounds.ts` | ~528 | `handleInterceptedToolCall()`：ask_image 图片代理多轮（thinking 块展示提问 + 视觉模型流式转发 + 跨轮历史 DataPart + 三协议轮次构建 `runOpenAIRound`/`runAnthropicRound`/`runResponsesRound`） |
-| `provider/errors.ts` | ~136 | `buildAllKeysUnavailableDetail()`、`tryTransientRetryRound()`、`checkZeroAnswerBudgetExhausted()`、`reportNativeUsage()`、`getRequestedReasoningEffort()` |
+| `provider/visionRounds.ts` | ~528 | `handleInterceptedToolCall()`：ask_image 图片代理多轮（thinking 块展示提问 + 视觉模型流式转发 + 跨轮历史 DataPart + 三协议轮次构建 `runOpenAIRound`/`runAnthropicRound`/`runResponsesRound`）；轮次请求失败时包装为 `VisionRoundError`（不触发 key 轮换） |
+| `provider/errors.ts` | ~136 | `VisionRoundError`（视觉代理轮内失败标记，不触发 key 轮换）、`buildAllKeysUnavailableDetail()`、`tryTransientRetryRound()`、`checkZeroAnswerBudgetExhausted()`、`reportNativeUsage()`、`getRequestedReasoningEffort()` |
 | `keys/keyManager.ts` | ~56 | barrel：统一导出 `keys/` 下全部 API（保持既有 `../keys/keyManager` 导入路径不变） |
 | `keys/types.ts` | ~34 | `ApiKeyEntry` / `ApiKeyStore` / `ApiKeyMode` / `SingleKeyFallback` / `KeyDisplayStatus` |
 | `keys/config.ts` | ~90 | 模式、**错误分类规则（`errorRules` 四元组：code + message + statusCode + action）**、冷却时长、重试次数配置读取 |
@@ -654,6 +655,7 @@ test/                                     # 测试脚本（运行前需 npm run 
 | `test/test-transient-retry.mjs` | ~190 | **错误分类规则测试**（15 项断言，errorRules 四元组）：code 精确匹配（billing→rotatePersist / upstream_stream_error→retrySameKey / INSUFFICIENT_BALANCE→rotatePersist）、statusCode 兑底（401/402→rotatePersist、429/503→rotateCooldown、400/500→retrySameKey）、403 未命中不轮换不重试、**code 优先于 statusCode（400 复用场景）**、规则可配置（新增 code / 改 action / message 不参与匹配）、**`markApiKeyExhausted` 按 action 决定冷却/持久化**；运行前需 `npm run compile` |
 | `test/test-vision-history.mjs` | ~155 | 跨轮视觉历史编解码 + 双 API 转换器闭环测试（源自上游 opencode-go-copilot v1.9.2，含 DeepSeek 空 reasoning_content 回归用例；运行前需 `npm run compile`） |
 | `test/test-anthropic-tool-result-merge.mjs` | ~168 | Anthropic 连续工具结果合并测试（源自上游，issue #87 场景：3 个并行 tool_use 结果合并为单条 user 消息；运行前需 `npm run compile`） |
+| `test/test-anthropic-image-index.mjs` | ~120 | **Anthropic 图片索引顺序测试**（3 项断言）：图片索引按 part 顺序内联分配，与 `collectLocalImages` 存储顺序一致（回归：曾延迟分配导致同一消息内混排 image DataPart 与文本 data-URI 图片时索引错位）；运行前需 `npm run compile` |
 | `test/test-cloud-sync-auto-push.mjs` | ~90 | **云同步 payload 去重测试**（18 项断言）：`syncPayloadHasChanged` 的空值/版本/长度/逐字段（value/credential/label）/顺序分支，以及 `undefined` 与 `""` 等价、`updatedAt` 不参与比较、**旧字段名 `cookie` 与 `credential` 等价（向后兼容）**；纯函数无 `vscode` 依赖，运行前需 `npm run compile` |
 | `test/test-cloud-sync-flow.mjs` | ~330 | **云同步 push/pull 集成测试**（22 项断言）：通过 `Module._load` 钩子注入 `vscode` mock + mock `fetch`，驱动真实 `pushToCloud`/`pullFromCloud` 流程——push 新建/PATCH/无变更短路/空 store 警告、**push 记录服务端 `updated_at`（回归：曾记录客户端时间导致 push 后必然多拉一次）**、pull 合并（credential/label 覆盖 + 可用性保留 + 追加新 key）/静默跳过/缓存 gist 失效回退；运行前需 `npm run compile` |
 | `test/test-cloud-sync-e2e.mjs` | ~250 | **云同步真实端到端测试**（16 项断言，`npm run test:e2e`）：用**真实 GitHub Gist API** 驱动生产 `pushToCloud`/`pullFromCloud`，验证 mock 无法覆盖的部分（真实请求体格式/响应结构/`updated_at`/内容往返）。安全设计：创建**专用测试 Gist**（描述带随机后缀）并预置其 id 到 `globalState`，**绝不触碰用户真实同步 Gist**；finally 中删除测试 Gist。凭据从 `GITHUB_TOKEN`/`GH_TOKEN` 或 `gh auth token` 读取，无凭据时 SKIP 退出 0；运行前需 `npm run compile` |
@@ -782,6 +784,9 @@ OpenAI 格式轮次：assistant `tool_calls` + `tool` role 消息；DeepSeek 兼
 ---
 
 ### 4.1i `src/provider/errors.ts`
+
+#### `class VisionRoundError extends Error`
+视觉代理轮内失败标记错误。主请求已成功、tool 上下文已建立，此时换 key 重跑整个请求会导致**主回答重复输出**并浪费 token。`visionRounds.ts` 在轮次请求失败时包装为此类型，`rotation.ts` 识别后**直接抛出、不轮换 key**（由用户重试整个请求）。
 
 #### `checkZeroAnswerBudgetExhausted(api, collectedOutputText, modelId): void`
 零正文预算耗尽检测：流式处理结束后，若结束原因为 `length`/`max_tokens` 且累计正文为空，抛出友好错误并记录 `request.zeroAnswer` 日志——避免思考模型把 max_tokens 预算全部耗在推理后静默返回空流。
