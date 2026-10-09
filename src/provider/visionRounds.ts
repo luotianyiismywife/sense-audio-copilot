@@ -70,7 +70,11 @@ export async function handleInterceptedToolCall(params: VisionRoundParams): Prom
 
     const config = vscode.workspace.getConfiguration();
     const visionModelId = config.get<string>("senseaudio.visionProxyModel", "qwen3.6-35b-a3b");
-    const maxRounds = config.get<number>("senseaudio.visionMaxRounds", 5);
+    // Clamp to [1, 20]: VS Code's schema minimum/maximum only warn in the UI —
+    // a value set directly in settings.json (e.g. 0 or negative) would otherwise
+    // silently drop every vision call (loop never runs).
+    const rawMaxRounds = config.get<number>("senseaudio.visionMaxRounds", 5);
+    const maxRounds = Number.isFinite(rawMaxRounds) ? Math.min(20, Math.max(1, Math.floor(rawMaxRounds))) : 5;
 
     // Accumulate messages across rounds
     let currentMessages: Record<string, unknown>[] = [...(storedMessages as Record<string, unknown>[])];

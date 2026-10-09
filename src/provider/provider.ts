@@ -85,11 +85,12 @@ export class SenseAudioChatModelProvider implements LanguageModelChatProvider {
     ) { }
 
     /**
-     * Cache of undici Agents keyed by bodyTimeout, so connection pools are
-     * reused across requests instead of being rebuilt (and losing keep-alive
-     * connections) on every chat request.
+     * Cached undici Agent + fetch, keyed by bodyTimeout. Reused across requests
+     * so connection pools (keep-alive) survive between chat requests. When the
+     * configured timeout changes, the previous agent is closed to avoid leaking
+     * its connection pool.
      */
-    private _undiciAgents = new Map<number, { agent: unknown; fetch: typeof fetch }>();
+    private _undiciAgent: { timeoutMs: number; agent: { close?: () => Promise<void> }; fetch: typeof fetch } | null = null;
 
     /**
      * Create an undici fetch function with custom bodyTimeout to prevent premature
@@ -100,15 +101,19 @@ export class SenseAudioChatModelProvider implements LanguageModelChatProvider {
         try {
             // eslint-disable-next-line @typescript-eslint/no-require-imports
             const undici = require(path.join(vscode.env.appRoot, 'node_modules', 'undici'));
-            const cached = this._undiciAgents.get(requestTimeoutMs);
-            if (cached) {
-                return cached.fetch;
+            if (this._undiciAgent && this._undiciAgent.timeoutMs === requestTimeoutMs) {
+                return this._undiciAgent.fetch;
+            }
+            // Timeout changed → close the previous agent (release its pool).
+            if (this._undiciAgent) {
+                void this._undiciAgent.agent.close?.().catch(() => {});
+                this._undiciAgent = null;
             }
             const agent = new undici.Agent({ bodyTimeout: requestTimeoutMs });
             const fetchFn: typeof fetch = (url: RequestInfo | URL, init?: RequestInit) => {
                 return undici.fetch(url, { ...init, dispatcher: agent });
             };
-            this._undiciAgents.set(requestTimeoutMs, { agent, fetch: fetchFn });
+            this._undiciAgent = { timeoutMs: requestTimeoutMs, agent, fetch: fetchFn };
             return fetchFn;
         } catch {
             return fetch;
@@ -170,6 +175,7 @@ export class SenseAudioChatModelProvider implements LanguageModelChatProvider {
         let requestTimeoutMs = 600000;
         let timeoutId: ReturnType<typeof setTimeout> | undefined;
         let dispatchFetch: typeof fetch;
+        let cancelListener: vscode.Disposable | undefined;
 
         try {
             // Get built-in model config (with fallback to auto-discovered config)
@@ -248,7 +254,7 @@ export class SenseAudioChatModelProvider implements LanguageModelChatProvider {
             timeoutId = setTimeout(() => abortController.abort(), requestTimeoutMs);
             // Connect VS Code cancellation token to abort the fetch immediately when user stops
             if (token.onCancellationRequested) {
-                token.onCancellationRequested(() => {
+                cancelListener = token.onCancellationRequested(() => {
                     if (!abortController.signal.aborted) {
                         abortController.abort();
                     }
@@ -377,6 +383,7 @@ export class SenseAudioChatModelProvider implements LanguageModelChatProvider {
             throw err;
         } finally {
             clearTimeout(timeoutId);
+            cancelListener?.dispose();
             const durationMs = Date.now() - requestStartTime;
             logger.info("request.end", { modelId: model.id, durationMs });
             this._lastRequestTime = Date.now();

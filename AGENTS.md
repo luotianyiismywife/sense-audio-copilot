@@ -590,7 +590,7 @@ test/                                     # 测试脚本（运行前需 npm run 
 | `api/anthropic/anthropicTypes.ts` | ~119 | Anthropic 类型定义 |
 | `api/responses/responsesApi.ts` | ~539 | Responses API 格式实现 (消息转换/请求构建/流式处理/图片代理/文本化工具回填) |
 | `api/responses/responsesTypes.ts` | ~117 | Responses 类型定义 |
-| `provider/provider.ts` | ~341 | `SenseAudioChatModelProvider`：VS Code 接口实现（`provideLanguageModelChatInformation` / `provideTokenCount` / `provideLanguageModelChatResponse`）+ 请求编排（模型配置解析、延迟、超时、取消、错误分类、状态栏生命周期）。具体逻辑委托给同目录模块 |
+| `provider/provider.ts` | ~341 | `SenseAudioChatModelProvider`：VS Code 接口实现（`provideLanguageModelChatInformation` / `provideTokenCount` / `provideLanguageModelChatResponse`）+ 请求编排（模型配置解析、延迟、超时、取消、错误分类、状态栏生命周期）。具体逻辑委托给同目录模块。**undici Agent 单条缓存**（超时变更时关闭旧 agent 释放连接池）；**取消监听器在 finally 中 dispose** |
 | `provider/requestOptions.ts` | ~106 | 请求参数决策：`applyReasoningEffort()`（thinking 模式）、`applyTemperature()`（预设/自定义/fixedTopP）、`resolveApiMode()`（auto 模式能力探测） |
 | `provider/rotation.ts` | ~196 | `runKeyRotationLoop()`：多 key 轮换循环（选 key → 执行 → 轮换错误换 key / 瞬态整轮退避重试 / 全部失败报错列脱敏原因）；**`VisionRoundError` 直接抛出、不轮换**（视觉代理轮内失败，换 key 会重复输出主回答） |
 | `provider/apiDispatch.ts` | ~221 | `executeApiRequest()`：三协议分发（openai/anthropic/responses）、请求体构建、`executeWithRetry`、流式处理、零正文预算耗尽检测、视觉代理后续轮次触发 |
@@ -770,7 +770,7 @@ test/                                     # 测试脚本（运行前需 npm run 
 ### 4.1h `src/provider/visionRounds.ts`
 
 #### `handleInterceptedToolCall(params): Promise<void>`
-图片代理（ask_image）多轮处理。非视觉模型收到图片时 `convertMessages` 把图片替换为文本引用并存入实例的 `localImages`；模型调用 `ask_image` / `ask_with_multi_image` 被 `CommonApi` 拦截到 `interceptedToolCall`。本函数：① 用模型的具体提问调用视觉模型（流式转发到 thinking 块）；② 输出跨轮视觉历史 DataPart（VS Code 自动带入下一轮对话）；③ 构建 assistant tool_call + tool result 消息并再次请求；④ 若模型再次调用 ask_image 则继续下一轮（最多 `senseaudio.visionMaxRounds` 次）。**视觉代理轮内失败不触发 key 轮换**（主请求已成功、tool 上下文已建立，换 key 会不一致），直接报错由用户重试整个请求。
+图片代理（ask_image）多轮处理。非视觉模型收到图片时 `convertMessages` 把图片替换为文本引用并存入实例的 `localImages`；模型调用 `ask_image` / `ask_with_multi_image` 被 `CommonApi` 拦截到 `interceptedToolCall`。本函数：① 用模型的具体提问调用视觉模型（流式转发到 thinking 块）；② 输出跨轮视觉历史 DataPart（VS Code 自动带入下一轮对话）；③ 构建 assistant tool_call + tool result 消息并再次请求；④ 若模型再次调用 ask_image 则继续下一轮（最多 `senseaudio.visionMaxRounds` 次，**代码夹取 [1,20]**——schema 的 minimum/maximum 仅在 UI 警告，settings.json 直设 0/负数会导致视觉调用被静默丢弃）。**视觉代理轮内失败不触发 key 轮换**（主请求已成功、tool 上下文已建立，换 key 会不一致），包装为 `VisionRoundError` 直接报错由用户重试整个请求。
 
 #### `runAnthropicRound(params, api, currentMessages, intercepted, description, hasLocalImages, roundAbortController): Promise<void>`（模块级私有）
 Anthropic 格式轮次：`tool_use` + `tool_result` content block；恢复 `system` 与 `thinking` 配置（启用→`{ type: "enabled", budget_tokens: 8192 }` / adaptive→`{ type: "adaptive" }` / 禁用→`{ type: "disabled" }`）；工具用 Anthropic 格式（`name`/`description`/`input_schema`）。
