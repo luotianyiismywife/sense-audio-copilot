@@ -27,22 +27,7 @@ export interface ErrorRule {
     message?: string;
     statusCode?: number;
     action: ErrorAction;
-}  
-
-/** 默认错误分类规则（基于 2026-09/10 实测） */
-const DEFAULT_ERROR_RULES: ErrorRule[] = [
-    // 错误体 code 精确匹配（主要匹配字段）
-    { code: "billing", message: "计费账户已被冻结（封号）", action: "rotatePersist" },
-    { code: "upstream_stream_error", message: "上游模型流意外中断", action: "retrySameKey" },
-    { code: "INSUFFICIENT_BALANCE", message: "余额不足", action: "rotatePersist" },
-    // HTTP 状态码兑底
-    { statusCode: 401, message: "无效 key", action: "rotatePersist" },
-    { statusCode: 402, message: "余额不足", action: "rotatePersist" },
-    { statusCode: 429, message: "限流", action: "rotateCooldown" },
-    { statusCode: 503, message: "服务端繁忙", action: "rotateCooldown" },
-    { statusCode: 400, message: "上游中断复用 400", action: "retrySameKey" },
-    { statusCode: 500, message: "内部错误", action: "retrySameKey" },
-];
+}
 
 function getConfig(): vscode.WorkspaceConfiguration {
     return vscode.workspace.getConfiguration("senseaudio");
@@ -77,14 +62,16 @@ export function getSingleKeyFallback(): SingleKeyFallback {
  * （`retrySameKey` 状态不变 / `rotateCooldown` 冷却中 / `rotatePersist` 不可用）。
  * 规则按数组顺序匹配，首个命中即生效。
  *
- * 默认规则基于 2026-09/10 实测：封号（`code=billing`，400）→ 不可用；
- * 上游流中断（`code=upstream_stream_error`，400）→ 不换重试；
- * 余额不足（`code=INSUFFICIENT_BALANCE`，402）→ 不可用；限流（429/503）→ 冷却。
+ * 默认规则**只在 `package.json` 的 `contributes.configuration` 中声明一份**
+ * （基于 2026-09/10 实测：封号 `code=billing` → 不可用；上游中断
+ * `code=upstream_stream_error` → 不换重试；余额不足 `code=INSUFFICIENT_BALANCE`
+ * → 不可用；限流 429/503 → 冷却），代码中不重复——避免两处默认值漂移。
  */
 export function getErrorRules(): ErrorRule[] {
-    const raw = getConfig().get<ErrorRule[]>("errorRules", DEFAULT_ERROR_RULES);
+    // 不传 fallback：VS Code 自动使用 package.json 中声明的 default
+    const raw = getConfig().get<ErrorRule[]>("errorRules");
     if (!Array.isArray(raw) || raw.length === 0) {
-        return DEFAULT_ERROR_RULES;
+        return [];
     }
     return raw.filter(
         (r): r is ErrorRule =>

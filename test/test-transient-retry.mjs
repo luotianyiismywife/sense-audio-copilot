@@ -20,10 +20,22 @@ const Module = require("node:module");
 const originalLoad = Module._load;
 // 可覆盖的配置（测试用）：键为 senseaudio 配置项名（不含前缀）
 const configOverrides = {};
+// 默认 errorRules（镜像 package.json 的 default——shim 不经过 package.json）
+const DEFAULT_ERROR_RULES = [
+    { code: "billing", message: "计费账户已被冻结（封号）", action: "rotatePersist" },
+    { code: "upstream_stream_error", message: "上游模型流意外中断", action: "retrySameKey" },
+    { code: "INSUFFICIENT_BALANCE", message: "余额不足", action: "rotatePersist" },
+    { statusCode: 401, message: "无效 key", action: "rotatePersist" },
+    { statusCode: 402, message: "余额不足", action: "rotatePersist" },
+    { statusCode: 429, message: "限流", action: "rotateCooldown" },
+    { statusCode: 503, message: "服务端繁忙", action: "rotateCooldown" },
+    { statusCode: 400, message: "上游中断复用 400", action: "retrySameKey" },
+    { statusCode: 500, message: "内部错误", action: "retrySameKey" },
+];
 const vscodeShim = {
     workspace: {
         getConfiguration: () => ({
-            get: (key, fallback) => (key in configOverrides ? configOverrides[key] : fallback),
+            get: (key, fallback) => (key in configOverrides ? configOverrides[key] : (fallback ?? (key === "errorRules" ? DEFAULT_ERROR_RULES : undefined))),
         }),
     },
 };
@@ -49,12 +61,12 @@ const apiError = (status, body = "") =>
     new Error(`API error: [${status}] Bad Request ${body} URL: https://api.senseaudio.cn/v1/chat/completions`);
 
 // ---------------------------------------------------------------------------
-// 1. 默认规则
+// 1. 默认规则（镜像 package.json 的 default）
 // ---------------------------------------------------------------------------
 console.log("默认规则");
 
-check("默认规则 9 条", () => {
-    assert.equal(getErrorRules().length, 9);
+check("默认规则 9 条（与 package.json default 一致）", () => {
+    assert.equal(getErrorRules().length, DEFAULT_ERROR_RULES.length);
 });
 
 // ---------------------------------------------------------------------------
