@@ -13,16 +13,13 @@ import type { SenseAudioModelItem } from "../core/types";
 import {
     getApiKeyMode,
     getApiKeyStore,
-    getKeyRotationReason,
     getSingleKeyFallback,
     getTransientRetryTimes,
     hasTransientExhaustedKey,
-    isKeyRotationError,
-    isTransientExhaustedReason,
-    isTransientRetryError,
     markApiKeyExhausted,
     markApiKeyAvailable,
     maskApiKey,
+    matchErrorRule,
     pickNextApiKey,
     setActiveKeyByValue,
     shouldSingleKeyFallbackSwitch,
@@ -434,19 +431,11 @@ async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff
                 if (response.length > 0) {
                     throw err;
                 }
-                if (isKeyRotationError(err)) {
-                    const rawReason = getKeyRotationReason(err);
-                    // Transient errors (platform busy / rate limit, per
-                    // transientRetryStatusCodes) must be kept cooldown-only
-                    // (never persisted unavailable) so the whole-round auto
-                    // retry can actually re-pick the keys. If the raw reason
-                    // isn't already transient (e.g. 500 → api_error but the
-                    // user added 500 to transientRetryStatusCodes), normalize
-                    // it to server_error so markApiKeyExhausted only cools.
-                    const reason =
-                        isTransientRetryError(err) && !isTransientExhaustedReason(rawReason)
-                            ? "server_error"
-                            : rawReason;
+                                // 错误分类（errorRules 四元组：code + message + statusCode + action）
+                const rule = matchErrorRule(err);
+                if (rule?.action === "rotateCooldown" || rule?.action === "rotatePersist") {
+                    // 换 key（冷却或持久化失效，由 action 决定）
+                    const reason = rule.message ?? rule.code ?? "";
                     failedKeys.set(entry.value, reason);
                     await markApiKeyExhausted(secrets, entry.value, reason);
                     logger.warn("commit.key.rotation", {
@@ -457,16 +446,13 @@ async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff
                     continue; // try next key
                 }
 
-                // Platform-side transient error that is NOT a key problem
-                // (e.g. 500 Internal Server Error — the key is fine, the
-                // platform is having trouble). Do NOT mark the key or rotate:
-                // just back off and retry the whole round with the same key.
-                if (isTransientRetryError(err)) {
+                if (rule?.action === "retrySameKey") {
+                    // 不换 key，退避后重试同一个 key（平台侧/客户端侧瞬态问题）
                     if (await tryTransientRetryRound(secrets, sameKeyRetryCount, maxTransientRetries)) {
                         sameKeyRetryCount++;
                         failedKeys.clear();
-                        // Force the SAME key on the next round: 500 is a platform
-                        // problem, not a key problem — do not rotate keys.
+                        // Force the SAME key on the next round: the error is a
+                        // platform/client-side problem, not a key problem.
                         forceKey = entry;
                         logger.warn("commit.key.transientRetrySameKey", {
                             key: entry.value.slice(0, 6) + "****",
@@ -481,7 +467,7 @@ async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff
                     });
                 }
 
-                throw err; // non-rotation error
+                throw err; // 未命中任何规则
             }
         }
 

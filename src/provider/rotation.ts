@@ -6,16 +6,13 @@ import { CommonApi } from "../api/commonApi";
 import {
     getApiKeyMode,
     getApiKeyStore,
-    getKeyRotationReason,
     getSingleKeyFallback,
     getTransientRetryTimes,
     hasTransientExhaustedKey,
-    isKeyRotationError,
-    isTransientExhaustedReason,
-    isTransientRetryError,
     markApiKeyAvailable,
     markApiKeyExhausted,
     maskApiKey,
+    matchErrorRule,
     pickNextApiKey,
     setActiveKeyByValue,
     shouldSingleKeyFallbackSwitch,
@@ -193,19 +190,11 @@ export async function runKeyRotationLoop(params: RotationLoopParams): Promise<vo
             if (abortController.signal.aborted) {
                 throw err; // timeout (outer catch shows friendly message)
             }
-            if (isKeyRotationError(err)) {
-                const rawReason = getKeyRotationReason(err);
-                // Transient errors (platform busy / rate limit, per
-                // transientRetryStatusCodes) must be kept cooldown-only
-                // (never persisted unavailable) so the whole-round auto
-                // retry can actually re-pick the keys. If the raw reason
-                // isn't already transient (e.g. 500 → api_error but the
-                // user added 500 to transientRetryStatusCodes), normalize
-                // it to server_error so markApiKeyExhausted only cools.
-                const reason =
-                    isTransientRetryError(err) && !isTransientExhaustedReason(rawReason)
-                        ? "server_error"
-                        : rawReason;
+            // 错误分类（errorRules 四元组：code + message + statusCode + action）
+            const rule = matchErrorRule(err);
+            if (rule?.action === "rotateCooldown") {
+                // 换 key + 仅内存冷却（瞬态，冷却到期自动恢复）
+                const reason = rule.message ?? rule.code ?? "";
                 failedKeys.set(currentEntry.value, reason);
                 await markApiKeyExhausted(secrets, currentEntry.value, reason);
                 logger.warn("key.rotation", {
@@ -215,17 +204,25 @@ export async function runKeyRotationLoop(params: RotationLoopParams): Promise<vo
                 });
                 continue; // try next key
             }
-
-            // Platform-side transient error that is NOT a key problem
-            // (e.g. 500 Internal Server Error — the key is fine, the platform
-            // is having trouble). Do NOT mark the key or rotate: just back off
-            // and retry the whole round with the same key.
-            if (isTransientRetryError(err)) {
+            if (rule?.action === "rotatePersist") {
+                // 换 key + 持久化失效（确定性：封号 / 余额不足 / 无效 key）
+                const reason = rule.message ?? rule.code ?? "";
+                failedKeys.set(currentEntry.value, reason);
+                await markApiKeyExhausted(secrets, currentEntry.value, reason);
+                logger.warn("key.rotation", {
+                    key: maskApiKey(currentEntry.value),
+                    reason,
+                    error: err instanceof Error ? err.message : String(err),
+                });
+                continue; // try next key
+            }
+            if (rule?.action === "retrySameKey") {
+                // 不换 key，退避后重试同一个 key（平台侧/客户端侧瞬态问题）
                 if (await tryTransientRetryRound(secrets, sameKeyRetryCount, maxTransientRetries)) {
                     sameKeyRetryCount++;
                     failedKeys.clear();
-                    // Force the SAME key on the next round: 500 is a platform
-                    // problem, not a key problem — do not rotate keys.
+                    // Force the SAME key on the next round: the error is a
+                    // platform/client-side problem, not a key problem.
                     forceKey = currentEntry;
                     logger.warn("key.transientRetrySameKey", {
                         key: maskApiKey(currentEntry.value),
@@ -240,7 +237,7 @@ export async function runKeyRotationLoop(params: RotationLoopParams): Promise<vo
                 });
             }
 
-            throw err; // non-rotation error (400/403/network/IMAGE_SENSITIVE…)
+            throw err; // 未命中任何规则（403/网络/IMAGE_SENSITIVE…）
         }
     }
 }

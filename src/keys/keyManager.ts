@@ -12,14 +12,13 @@
  */
 
 export type { ApiKeyEntry, ApiKeyStore, ApiKeyMode, SingleKeyFallback, KeyDisplayStatus } from "./types";
+export type { ErrorAction, ErrorRule } from "./config";
 
 export {
     getApiKeyMode,
     getRotationCursorIndex,
     getSingleKeyFallback,
-    getRotationStatusCodes,
-    getRotationErrorPatterns,
-    getTransientRetryStatusCodes,
+    getErrorRules,
     getExhaustedCooldownMin,
     getTransientRetryTimes,
 } from "./config";
@@ -49,6 +48,7 @@ export {
     getTransientExhaustedInfo,
     isApiKeyEligible,
     hasTransientExhaustedKey,
+    matchErrorRule,
     isKeyRotationError,
     isTransientRetryError,
     isTransientExhaustedReason,

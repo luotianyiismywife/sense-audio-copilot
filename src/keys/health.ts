@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { getExhaustedCooldownMin, getRotationErrorPatterns, getRotationStatusCodes, getTransientRetryStatusCodes } from "./config";
+import { getErrorRules, getExhaustedCooldownMin, getTransientRetryTimes, type ErrorRule } from "./config";
 import { getTransientExhaustedMap } from "./state";
 import { getApiKeyStore, saveApiKeyStore } from "./store";
 import type { ApiKeyEntry, KeyDisplayStatus } from "./types";
@@ -15,19 +15,15 @@ import type { ApiKeyEntry, KeyDisplayStatus } from "./types";
 const TRANSIENT_REASONS = new Set(["rate_limited", "server_error"]);
 
 /**
- * 已知的瞬态上游错误签名（消息文本，小写匹配）。
+ * 从错误消息中提取错误响应体的 `error.code` 字段值（小写）。
  *
- * 上游模型流意外中断（`upstream_stream_error`，HTTP 400）等错误消息明确要求
- * 重试（"Please retry the request"），属**平台侧瞬态问题**而非 key 问题——
- * 应像 500 一样退避重试同一个 key，而非轮换 key 或持久化禁用 key。
- * （2026-10-09 实测：该错误曾被当作 api_error 持久化 available=false，
- * 导致 key 被永久禁用。）
+ * 错误消息格式（provider 抛出）：`API error: [400] Bad Request\n{...json...}\nURL: ...`，
+ * JSON 内含 `"code":"xxx"` 或 `"error":{"code":"xxx"}`。用正则提取第一个
+ * `"code":"<value>"` 的值。
  */
-const TRANSIENT_UPSTREAM_SIGNATURES = ["upstream_stream_error"];
-
-/** 错误消息（小写）是否命中已知的瞬态上游错误签名 */
-function isTransientUpstreamError(message: string): boolean {
-    return TRANSIENT_UPSTREAM_SIGNATURES.some((sig) => message.includes(sig));
+function extractErrorCode(message: string): string | undefined {
+    const m = message.match(/"code"\s*:\s*"([^"]+)"/);
+    return m?.[1]?.toLowerCase();
 }
 
 /** 是否为瞬态失效原因（429 限流 / 503 服务端繁忙） */
@@ -74,93 +70,63 @@ export async function hasTransientExhaustedKey(secrets: vscode.SecretStorage): P
 }
 
 /**
- * 判断错误是否应触发 key 轮换。
- * 匹配规则：状态码出现在配置列表 `[code]`/`status code`，或错误文本包含任一 patterns。
+ * 匹配错误分类规则（四元组：code + message + statusCode + action）。
+ *
+ * **主要匹配错误响应体的 `error.code` 字段**（精确匹配，小写比较）；
+ * `message` 仅作可读性说明不参与匹配；`statusCode` 兜底（匹配 `[code]` /
+ * `status code` 形式，HTTP 400 被封号和上游中断复用，不能单独作为判据）。
+ * 规则按 `errorRules` 数组顺序匹配，首个命中即生效；均未命中返回 undefined
+ * （不轮换、不重试，直接抛错）。
+ *
+ * `action` 与 key 状态一一对应：
+ * - `retrySameKey` → 状态不变（不换 key，退避后重试同一个 key）
+ * - `rotateCooldown` → 冷却中（换 key，仅内存冷却，到期自动恢复）
+ * - `rotatePersist` → 不可用（换 key，持久化 available=false）
+ */
+export function matchErrorRule(err: unknown): ErrorRule | undefined {
+    const message = (err instanceof Error ? err.message : String(err)).toLowerCase();
+    const errorCode = extractErrorCode(message);
+    for (const rule of getErrorRules()) {
+        // 主要匹配：错误体 error.code 精确匹配
+        if (rule.code && errorCode === rule.code.toLowerCase()) {
+            return rule;
+        }
+        // 兑底：HTTP 状态码
+        if (
+            typeof rule.statusCode === "number" &&
+            (message.includes(`[${rule.statusCode}]`) || new RegExp(`\\bstatus ${rule.statusCode}\\b`).test(message))
+        ) {
+            return rule;
+        }
+    }
+    return undefined;
+}
+
+/**
+ * 判断错误是否应触发 key 轮换（换 key）。
+ * 命中 `rotateCooldown` / `rotatePersist` 规则时换 key；`retrySameKey` 不换。
  */
 export function isKeyRotationError(err: unknown): boolean {
-    const message = (err instanceof Error ? err.message : String(err)).toLowerCase();
-    // 瞬态上游错误（如 upstream_stream_error）是平台侧问题，不是 key 问题——
-    // 即使其状态码（400）被配置进轮换列表，也不应轮换 key（交由瞬态重试处理）。
-    if (isTransientUpstreamError(message)) {
-        return false;
-    }
-    const statusCodes = getRotationStatusCodes();
-    const patterns = getRotationErrorPatterns();
-
-    // 状态码匹配：`[401]` / `status 401` 形式
-    for (const code of statusCodes) {
-        if (message.includes(`[${code}]`) || message.includes(`status ${code}`)) {
-            return true;
-        }
-    }
-    // 文本匹配（不区分大小写）
-    for (const pattern of patterns) {
-        if (pattern && message.includes(pattern.toLowerCase())) {
-            return true;
-        }
-    }
-    return false;
+    const rule = matchErrorRule(err);
+    return rule !== undefined && rule.action !== "retrySameKey";
 }
 
 /**
- * 判断错误是否为"瞬态类"（平台繁忙/限流，可能很快恢复 → 值得整轮自动重试）。
- * 匹配 `senseaudio.transientRetryStatusCodes`（默认 [429, 500, 503]）中的状态码。
- * 与 `isKeyRotationError` 解耦：触发轮换的状态码与触发自动重试的状态码可分别配置。
+ * 判断错误是否为"瞬态类"（值得整轮自动重试）。
+ * 命中 `retrySameKey` / `rotateCooldown` 规则时为瞬态（`rotatePersist` 为确定性）。
  */
 export function isTransientRetryError(err: unknown): boolean {
-    const message = (err instanceof Error ? err.message : String(err)).toLowerCase();
-    for (const code of getTransientRetryStatusCodes()) {
-        if (message.includes(`[${code}]`) || message.includes(`status ${code}`)) {
-            return true;
-        }
-    }
-    // 已知瞬态上游错误（如 upstream_stream_error）：应退避重试同一个 key
-    if (isTransientUpstreamError(message)) {
-        return true;
-    }
-    return false;
+    const rule = matchErrorRule(err);
+    return rule !== undefined && rule.action !== "rotatePersist";
 }
 
 /**
- * 从轮换错误中提取失效原因。
- * 状态码优先（文本仅在对应状态码命中时参与判定，避免 429/503 响应体
- * 偶然包含"余额不足"时误分类为 balance 并持久化禁用 key）：
- * - 402 → "balance"
- * - 401 → "invalid"
- * - 429 / RATE_LIMITED → "rate_limited"
- * - 503 → "server_error"
- * - 封号（code=billing / "计费账户已被冻结"，400，2026-09-19 实测）→ "banned"
- * - 其他（文本 patterns 命中的轮换错误）→ "api_error"
+ * 从错误中提取失效原因（规则的 `message` 说明，供日志/报错展示）。
+ * 均未命中返回 undefined。
  */
-export function getKeyRotationReason(err: unknown): string {
-    const message = (err instanceof Error ? err.message : String(err)).toLowerCase();
-    // 状态码优先：文本（"余额不足"等）仅在对应状态码命中时才参与判定，
-    // 避免 429/503 响应体偶然包含"余额不足"时把瞬态错误误分类为 balance
-    // （持久化 available=false，key 被禁用直到手动重置）。
-    if (message.includes("[402]") || /\bstatus 402\b/.test(message)) {
-        // 402 状态码命中即判定余额不足（文本仅作辅助确认，不再单独触发）
-        return "balance";
-    }
-    if (message.includes("[401]") || /\bstatus 401\b/.test(message)) {
-        return "invalid";
-    }
-    if (message.includes("[429]") || /\bstatus 429\b/.test(message) || message.includes("rate_limited")) {
-        return "rate_limited";
-    }
-    if (message.includes("[503]") || /\bstatus 503\b/.test(message)) {
-        return "server_error";
-    }
-    // 封号：400 + code=billing / "计费账户已被冻结"（确定性失败，持久化不可用）
-    if (message.includes("计费账户已被冻结") || message.includes("\"code\":\"billing\"") || message.includes("ref_code:400901") || message.includes("ref_code\":400901")) {
-        return "banned";
-    }
-    // 瞬态上游错误（如 upstream_stream_error）→ server_error（仅冷却，不持久化）
-    if (isTransientUpstreamError(message)) {
-        return "server_error";
-    }
-    return "api_error";
+export function getKeyRotationReason(err: unknown): string | undefined {
+    return matchErrorRule(err)?.message;
 }
-
 /**
  * 获取 key 当前不可用的机器可读原因（供"全部 key 不可用"报错展示）：
  * - 瞬态冷却中（429/503）→ "rate_limited" / "server_error"
