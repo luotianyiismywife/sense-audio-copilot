@@ -1,27 +1,25 @@
 # SenseAudio 测试脚本
 
-> 所有测试运行前需先 `npm run compile`（除 `api-tests.mjs` 外，其余测试从 `out/` 加载编译产物）。
+> 所有测试运行前需先 `npm run compile`（从 `out/` 加载编译产物）。
 >
 > **凭据一律从命令行参数或环境变量读取，不写入仓库**：
-> `SENSEAUDIO_API_KEY` / `SENSEAUDIO_PUBLIC_KEY` / `SENSEAUDIO_TEST_BANNED_KEY` / `SENSEAUDIO_TEST_NORMAL_KEY`
+> `SENSEAUDIO_API_KEY` / `SENSEAUDIO_PUBLIC_KEY`
+>
+> **联网探测脚本已移至 `scripts/dev/`**（`probe-*.mjs`）——它们不是自动化测试（无断言，仅打印结果），
+> 详见 [scripts/dev/](../scripts/dev/)。
 
 ## 测试清单
 
 | 脚本 | 类型 | 说明 |
 |------|------|------|
-| `api-tests.mjs` | 联网 | 三协议完整测试（OpenAI / Anthropic / Responses），需真实 API Key |
 | `test-plan-usage.mjs` | 离线 | **套餐用量快照**（29 项断言）：窗口归一化、百分比、超额判定、三态计费模式、倒计时、摘要格式化、真实 API 夹具回归 |
 | `test-transient-retry.mjs` | 离线 | **错误分类规则**（15 项断言，errorRules 四元组）：code 精确匹配（billing→rotatePersist / upstream_stream_error→retrySameKey / INSUFFICIENT_BALANCE→rotatePersist）、statusCode 兑底、code 优先于 statusCode（400 复用）、规则可配置、`markApiKeyExhausted` 按 action 决定冷却/持久化 |
 | `test-vision-history.mjs` | 离线 | 跨轮视觉历史编解码 + 双 API 转换器闭环（含 DeepSeek 空 reasoning_content 回归） |
 | `test-anthropic-tool-result-merge.mjs` | 离线 | Anthropic 连续工具结果合并（issue #87：3 个并行 tool_use 结果合并为单条 user 消息） |
 | `test-batch-import.mjs` | 离线 | **批量导入解析器**（14 项断言）：`key---credential---备注;` 格式、空字段、备注含分隔符、容错 |
-| `test-cloud-sync-auto-push.mjs` | 离线 | **云同步 payload 去重**（16 项断言）：`syncPayloadHasChanged` 空值/版本/长度/逐字段/顺序分支，`undefined` 与 `""` 等价、`updatedAt` 不参与比较 |
+| `test-cloud-sync-auto-push.mjs` | 离线 | **云同步 payload 去重**（18 项断言）：`syncPayloadHasChanged` 空值/版本/长度/逐字段/顺序分支，`undefined` 与 `""` 等价、`updatedAt` 不参与比较、旧字段名 `cookie` 兼容 |
 | `test-cloud-sync-flow.mjs` | 离线 | **云同步 push/pull 集成**（22 项断言）：mock fetch + mock vscode 驱动生产 `pushToCloud`/`pullFromCloud`（新建/PATCH/短路/合并/静默/缓存失效回退/服务端时间戳回归） |
 | `test-cloud-sync-e2e.mjs` | 联网 | **云同步真实端到端**（16 项断言）：真实 GitHub Gist API 驱动生产代码，验证请求体格式/响应结构/`updated_at`/内容往返；需 gist 权限凭据，无凭据时 SKIP |
-| `test-apply-token.mjs` | 联网 | public_key 换发短期 token（`auth.senseaudio.cn`） |
-| `test-model-diff.mjs` | 联网 | 内置清单 vs `/v1/models` 差异（内置清单从编译产物读取，不会脱节） |
-| `test-responses-recheck.mjs` | 联网 | Responses 协议复检（工具格式扁平化 / function_call 块 / tool_choice 行为） |
-| `test-vision-check.mjs` | 联网 | 视觉能力检查（生成合法 PNG 测图片输入） |
 
 ## 运行
 
@@ -42,18 +40,33 @@ node test/test-cloud-sync-flow.mjs
 # 云同步真实端到端（需 GitHub gist 权限凭据；无凭据时 SKIP 退出 0）
 npm run test:e2e
 # 凭据来源：GITHUB_TOKEN / GH_TOKEN 环境变量，或 `gh auth token`
-
-# 联网测试（需 API Key，从参数或环境变量读取）
-node test/api-tests.mjs <API_KEY> [openai|anthropic|responses|all]
-SENSEAUDIO_API_KEY=<key> node test/test-model-diff.mjs
-SENSEAUDIO_API_KEY=<key> node test/test-vision-check.mjs [MODEL_ID]
-SENSEAUDIO_API_KEY=<key> node test/test-responses-recheck.mjs
-SENSEAUDIO_PUBLIC_KEY=<pub-key> node test/test-apply-token.mjs
 ```
 
 ---
 
-## `api-tests.mjs` 详情
+## 联网探测脚本（`scripts/dev/probe-*.mjs`）
+
+> 这些脚本**不是自动化测试**（无断言，仅打印结果供人工判断），需真实 API Key，已移至 `scripts/dev/`。
+
+| 脚本 | 说明 |
+|------|------|
+| `probe-api.mjs` | 三协议完整探测（OpenAI / Anthropic / Responses） |
+| `probe-model-diff.mjs` | 内置清单 vs `/v1/models` 差异（内置清单从编译产物读取，不会脱节） |
+| `probe-responses.mjs` | Responses 协议复检（工具格式扁平化 / function_call 块 / tool_choice 行为） |
+| `probe-vision.mjs` | 视觉能力检查（生成合法 PNG 测图片输入） |
+| `probe-apply-token.mjs` | public_key 换发短期 token（`auth.senseaudio.cn`） |
+
+```bash
+node scripts/dev/probe-api.mjs <API_KEY> [openai|anthropic|responses|all]
+SENSEAUDIO_API_KEY=<key> node scripts/dev/probe-model-diff.mjs
+SENSEAUDIO_API_KEY=<key> node scripts/dev/probe-vision.mjs [MODEL_ID]
+SENSEAUDIO_API_KEY=<key> node scripts/dev/probe-responses.mjs
+SENSEAUDIO_PUBLIC_KEY=<pub-key> node scripts/dev/probe-apply-token.mjs
+```
+
+---
+
+## `probe-api.mjs` 详情
 
 三协议完整测试脚本，用于验证 SenseAudio 平台 API 的兼容性。
 

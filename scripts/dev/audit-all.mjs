@@ -150,14 +150,19 @@ const srcText = new Map(srcFiles.map((f) => [f, fs.readFileSync(f, "utf8")]));
     }
 }
 
-// ── 7. 测试脚本引用的 out/ 路径 ──
+// ── 7. 测试/探测脚本引用的 out/ 路径 ──
 {
-    const testDir = "test";
-    for (const f of fs.readdirSync(testDir).filter((n) => n.endsWith(".mjs"))) {
-        const text = fs.readFileSync(path.join(testDir, f), "utf8");
-        for (const m of text.matchAll(/["'](\.\.\/out\/[A-Za-z0-9_./-]+\.js)["']/g)) {
-            const rel = m[1].replace("../", "");
-            if (!fs.existsSync(rel)) note(`[test] ${f} requires missing build output: ${m[1]}`);
+    // 扫描 test/ 与 scripts/dev/ 下的 .mjs，校验其 `../out/...` / `../../out/...`
+    // 引用在编译产物中真实存在（防止重命名/移动后路径失效）。
+    const dirs = ["test", "scripts/dev"];
+    for (const dir of dirs) {
+        if (!fs.existsSync(dir)) continue;
+        for (const f of fs.readdirSync(dir).filter((n) => n.endsWith(".mjs"))) {
+            const text = fs.readFileSync(path.join(dir, f), "utf8");
+            for (const m of text.matchAll(/["']((?:\.\.\/)+out\/[A-Za-z0-9_./-]+\.js)["']/g)) {
+                const rel = m[1].replace(/^(?:\.\.\/)+/, "");
+                if (!fs.existsSync(rel)) note(`[test] ${dir}/${f} requires missing build output: ${m[1]}`);
+            }
         }
     }
 }

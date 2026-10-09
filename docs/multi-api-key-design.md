@@ -117,7 +117,7 @@ const transientExhausted = new Map<string, TransientExhausted>();
 | `hasTransientExhaustedKey(secrets)` | 异步 | 是否存在冷却中的 key（供"全部不可选"时判断是否值得整轮自动重试） |
 | `isApiKeyEligible(entry)` | 同步 | 判断是否可被选中（非冷却中、非 `available=false`） |
 | `matchErrorRule(err)` | 同步 | 按 `errorRules` 数组顺序匹配（code 精确匹配优先于 statusCode 兑底），返回 `ErrorRule` 或 undefined |
-| `getKeyUnavailableReason(entry)` | 同步 | 取当前不可用原因（供报错展示）：冷却中→`rate_limited`/`server_error`；持久化不可用→`unavailable`；其他→`balance` |
+| `getKeyUnavailableReason(entry)` | 同步 | 取当前不可用的**可读原因**（供报错展示）：冷却中→规则 `message`（如"限流"）；持久化不可用→"不可用"；未检测→"未检测" |
 | `markApiKeyExhausted(secrets, key, reason, action)` | 异步 | **按 `action` 决定处置**：`rotateCooldown` → 仅内存冷却不持久化；`rotatePersist` → 持久化 `available=false` |
 | `markApiKeyAvailable(secrets, key)` | 异步 | 置 `available=true`，清冷却（自愈/手动检测通过） |
 | `updateKeyAvailability(secrets, key, available)` | 异步 | 通用状态更新 |

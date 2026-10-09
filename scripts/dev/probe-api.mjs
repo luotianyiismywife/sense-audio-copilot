@@ -2,7 +2,7 @@
  * SenseAudio API 三协议完整测试脚本 (v2 - 修正非流式/流式解析)
  *
  * 用法:
- *   node test/api-tests.mjs <API_KEY> [openai|anthropic|responses|all]
+ *   node scripts/dev/probe-api.mjs <API_KEY> [openai|anthropic|responses|all]
  *
  * 模型 ID 可用环境变量覆盖（默认取当前平台在售模型，2026-09-29 实测）：
  *   SENSEAUDIO_TEST_MODEL          主测试模型（默认 deepseek-v4.1-flash）
@@ -13,7 +13,7 @@
 const API_KEY = process.argv[2];
 const filter = process.argv[3] || "all";
 if (!API_KEY) {
-    console.error("用法: node test/api-tests.mjs <API_KEY> [openai|anthropic|responses|all]");
+    console.error("用法: node scripts/dev/probe-api.mjs <API_KEY> [openai|anthropic|responses|all]");
     process.exit(1);
 }
 

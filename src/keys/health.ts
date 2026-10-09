@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { l10n } from "../core/localize";
 import { getErrorRules, getExhaustedCooldownMin, type ErrorAction, type ErrorRule } from "./config";
 import { getTransientExhaustedMap } from "./state";
 import { getApiKeyStore, saveApiKeyStore } from "./store";
@@ -92,10 +93,10 @@ export function matchErrorRule(err: unknown): ErrorRule | undefined {
 }
 
 /**
- * 获取 key 当前不可用的机器可读原因（供"全部 key 不可用"报错展示）：
- * - 瞬态冷却中（429/503）→ "rate_limited" / "server_error"
- * - 持久化不可用（available=false）→ "unavailable"
- * - 其他（未检测 / 余额不足 / 封号）→ "balance"
+ * 获取 key 当前不可用的**可读原因**（供"全部 key 不可用"报错展示）：
+ * - 冷却中 → 命中规则的 `message`（如"限流"）
+ * - 持久化不可用（available=false）→ "不可用"
+ * - 未检测 → "未检测"
  */
 export function getKeyUnavailableReason(entry: ApiKeyEntry): string {
     const transient = getTransientExhaustedInfo(entry.value);
@@ -103,9 +104,9 @@ export function getKeyUnavailableReason(entry: ApiKeyEntry): string {
         return transient.reason;
     }
     if (entry.available === false) {
-        return "unavailable";
+        return l10n("Unavailable");
     }
-    return "balance";
+    return l10n("Not checked");
 }
 
 /**

@@ -1,9 +1,9 @@
 // 复测 Responses 端点的关键行为（工具格式扁平化 / function_call 块 / tool_choice）
-// 用法：node test/test-responses-recheck.mjs <API_KEY>
+// 用法：node scripts/dev/probe-responses.mjs <API_KEY>
 //      或设置环境变量 SENSEAUDIO_API_KEY
 const KEY = process.argv[2] || process.env.SENSEAUDIO_API_KEY;
 if (!KEY) {
-    console.error("用法：node test/test-responses-recheck.mjs <API_KEY>");
+    console.error("用法：node scripts/dev/probe-responses.mjs <API_KEY>");
     process.exit(1);
 }
 const BASE = 'https://api.senseaudio.cn/v1/responses';

@@ -539,7 +539,12 @@ scripts/
 └── dev/                                  # 开发调试
     ├── check-new-models.mjs              # 检查 API 新模型
     ├── check-settings.mjs                # 设置项一致性核对（声明 vs 使用，挂到 compile）
-    └── audit-all.mjs                     # 完整审计（npm run audit，7 项检查）
+    ├── audit-all.mjs                     # 完整审计（npm run audit，7 项检查）
+    ├── probe-api.mjs                     # 三协议 API 探测（OpenAI/Anthropic/Responses，需 API Key）
+    ├── probe-model-diff.mjs              # 内置清单 vs /v1/models 差异（需 API Key）
+    ├── probe-responses.mjs               # Responses 协议复检（需 API Key）
+    ├── probe-vision.mjs                  # 视觉能力检查（需 API Key）
+    └── probe-apply-token.mjs             # public_key 换发短期 token（需 public_key）
 
 scripts/
 └── scaffold/
@@ -556,18 +561,14 @@ docs/
     └── multi-api-key-design-v1.9-cookie-precheck.md  # 含已废弃 cookie 预检架构的旧版设计
 
 test/                                     # 测试脚本（运行前需 npm run compile）
-├── api-tests.mjs                         # 三协议 API 完整测试（OpenAI/Anthropic/Responses，第 9b 项含生产 400 回归用例）
 ├── test-plan-usage.mjs                   # 套餐用量快照测试（29 项断言）
-├── test-transient-retry.mjs              # 错误分类规则测试（13 项断言，errorRules 四元组：code 优先 + statusCode 兑底 + action 分派）├── test-vision-history.mjs               # 跨轮视觉历史编解码 + 双 API 转换器闭环测试
+├── test-transient-retry.mjs              # 错误分类规则测试（15 项断言，errorRules 四元组：code 优先 + statusCode 兑底 + action 分派）
+├── test-vision-history.mjs               # 跨轮视觉历史编解码 + 双 API 转换器闭环测试
 ├── test-anthropic-tool-result-merge.mjs  # Anthropic 连续工具结果合并测试（issue #87 场景）
 ├── test-batch-import.mjs                 # 批量导入解析器测试（14 项断言）
-├── test-cloud-sync-auto-push.mjs         # 云同步 payload 去重测试（16 项断言，纯函数无 vscode 依赖）
+├── test-cloud-sync-auto-push.mjs         # 云同步 payload 去重测试（18 项断言，纯函数无 vscode 依赖）
 ├── test-cloud-sync-flow.mjs              # 云同步 push/pull 集成测试（22 项断言，mock fetch + mock vscode）
 ├── test-cloud-sync-e2e.mjs               # 云同步真实端到端测试（16 项断言，真实 GitHub Gist + 生产代码，需 gist 权限凭据）
-├── test-apply-token.mjs                  # 令牌应用测试
-├── test-model-diff.mjs                   # 模型差异测试
-├── test-responses-recheck.mjs            # Responses 协议复检
-├── test-vision-check.mjs                 # 视觉能力检查
 └── README.md                             # 测试说明与平台差异记录（含 Responses 扁平化问题）
 
 .copilot/
@@ -593,7 +594,7 @@ test/                                     # 测试脚本（运行前需 npm run 
 | `provider/rotation.ts` | ~196 | `runKeyRotationLoop()`：多 key 轮换循环（选 key → 执行 → 轮换错误换 key / 瞬态整轮退避重试 / 全部失败报错列脱敏原因） |
 | `provider/apiDispatch.ts` | ~221 | `executeApiRequest()`：三协议分发（openai/anthropic/responses）、请求体构建、`executeWithRetry`、流式处理、零正文预算耗尽检测、视觉代理后续轮次触发 |
 | `provider/visionRounds.ts` | ~528 | `handleInterceptedToolCall()`：ask_image 图片代理多轮（thinking 块展示提问 + 视觉模型流式转发 + 跨轮历史 DataPart + 三协议轮次构建 `runOpenAIRound`/`runAnthropicRound`/`runResponsesRound`） |
-| `provider/errors.ts` | ~136 | `REASON_TEXT`、`buildAllKeysUnavailableDetail()`、`tryTransientRetryRound()`、`checkZeroAnswerBudgetExhausted()`、`reportNativeUsage()`、`getRequestedReasoningEffort()` |
+| `provider/errors.ts` | ~136 | `buildAllKeysUnavailableDetail()`、`tryTransientRetryRound()`、`checkZeroAnswerBudgetExhausted()`、`reportNativeUsage()`、`getRequestedReasoningEffort()` |
 | `keys/keyManager.ts` | ~56 | barrel：统一导出 `keys/` 下全部 API（保持既有 `../keys/keyManager` 导入路径不变） |
 | `keys/types.ts` | ~34 | `ApiKeyEntry` / `ApiKeyStore` / `ApiKeyMode` / `SingleKeyFallback` / `KeyDisplayStatus` |
 | `keys/config.ts` | ~90 | 模式、**错误分类规则（`errorRules` 四元组：code + message + statusCode + action）**、冷却时长、重试次数配置读取 |
@@ -642,16 +643,20 @@ test/                                     # 测试脚本（运行前需 npm run 
 | `scripts/build/copy-tokenizer.js` | ~55 | postinstall：确保 `assets/model/o200k_base.tiktoken` 存在，缺失时从 OpenAI 公共存储下载 |
 | `scripts/dev/check-new-models.mjs` | ~244 | 检查 API 新模型（对比内置清单） |
 | `scripts/dev/check-settings.mjs` | ~70 | **设置项一致性核对**：扫描 `src/**/*.ts` 中所有 `getConfiguration` 读取（含带前缀 / 无前缀 / 常量键 / **嵌套配置节**四种形式），与 `package.json` 的 `contributes.configuration` 双向 diff，输出「已用未声明」与「已声明未用」。**已挂到 `npm run compile`**（有漂移则编译失败）。用于防止设置项漂移（曾发现 `enableAutoModelDiscovery` 声明了但代码从未读取、`senseaudio.retry.*` 四个设置从未声明） |
-| `scripts/dev/audit-all.mjs` | ~150 | **完整审计**（`npm run audit`）：7 项检查一次跑完——① 设置项漂移 ② 未使用导出 ③ 未使用 l10n 键 ④ `package.nls.json` / `package.nls.zh-cn.json` 键集合一致性 ⑤ 命令声明 vs 注册 ⑥ 文档引用的文件路径是否存在 ⑦ 测试脚本引用的 `out/` 路径是否存在 |
+| `scripts/dev/audit-all.mjs` | ~150 | **完整审计**（`npm run audit`）：7 项检查一次跑完——① 设置项漂移 ② 未使用导出 ③ 未使用 l10n 键 ④ `package.nls.json` / `package.nls.zh-cn.json` 键集合一致性 ⑤ 命令声明 vs 注册 ⑥ 文档引用的文件路径是否存在 ⑦ 测试/探测脚本引用的 `out/` 路径是否存在 |
+| `scripts/dev/probe-api.mjs` | ~282 | 三协议 API 探测（OpenAI/Anthropic/Responses，第 9b 项含生产 400 回归用例），需 API Key |
+| `scripts/dev/probe-model-diff.mjs` | ~61 | 内置清单 vs `/v1/models` 差异（内置清单从编译产物读取，不会脱节），需 API Key |
+| `scripts/dev/probe-responses.mjs` | ~55 | Responses 协议复检（工具格式扁平化 / function_call 块 / tool_choice 行为），需 API Key |
+| `scripts/dev/probe-vision.mjs` | ~69 | 视觉能力检查（生成合法 PNG 测图片输入），需 API Key |
+| `scripts/dev/probe-apply-token.mjs` | ~30 | public_key 换发短期 token（`auth.senseaudio.cn`），需 public_key |
 | `scripts/scaffold/scaffold.mjs` | ~170 | **项目脚手架**（2026-10-05 新增）：从本仓库抽取可复用骨架生成新 VS Code 扩展项目。复制通用骨架（tsconfig / eslint / .gitignore / .vscode 调试配置 / scripts/build 四件套），按参数生成 package.json（通用 scripts + 依赖，contributes 留空）、最小 `src/extension.ts`、AGENTS.md 骨架（编译铁律四条）、README 与 test/ 占位。用法：`node scripts/scaffold/scaffold.mjs --name <ext-name> --publisher <pub> --dir <target> [--desc "..."]`。目标已存在 package.json 时拒绝覆盖；不复制业务代码（src/ 业务逻辑、test/ 测试、resources/、docs/、nls 文件） |
-| `test/api-tests.mjs` | ~282 | 三协议 API 完整测试脚本（OpenAI/Anthropic/Responses，第 9b 项含生产 400 回归用例） |
 | `test/test-plan-usage.mjs` | ~250 | **套餐用量快照测试**（29 项断言）：窗口归一化（各平台 key 命名）、百分比（pending 计入/超额不截断）、超额判定（只看月度窗口）、三态计费模式、倒计时、摘要格式化、**真实 API 夹具回归**（代金券 200 倍换算 bug）；运行前需 `npm run compile` |
-| `test/test-transient-retry.mjs` | ~120 | **错误分类规则测试**（13 项断言，errorRules 四元组）：code 精确匹配（billing→rotatePersist / upstream_stream_error→retrySameKey / INSUFFICIENT_BALANCE→rotatePersist）、statusCode 兑底（401/402→rotatePersist、429/503→rotateCooldown、400/500→retrySameKey）、403 未命中不轮换不重试、**code 优先于 statusCode（400 复用场景）**、规则可配置（新增 code / 改 action / message 不参与匹配）；运行前需 `npm run compile` || `test/test-vision-history.mjs` | ~155 | 跨轮视觉历史编解码 + 双 API 转换器闭环测试（源自上游 opencode-go-copilot v1.9.2，含 DeepSeek 空 reasoning_content 回归用例；运行前需 `npm run compile`） |
+| `test/test-transient-retry.mjs` | ~190 | **错误分类规则测试**（15 项断言，errorRules 四元组）：code 精确匹配（billing→rotatePersist / upstream_stream_error→retrySameKey / INSUFFICIENT_BALANCE→rotatePersist）、statusCode 兑底（401/402→rotatePersist、429/503→rotateCooldown、400/500→retrySameKey）、403 未命中不轮换不重试、**code 优先于 statusCode（400 复用场景）**、规则可配置（新增 code / 改 action / message 不参与匹配）、**`markApiKeyExhausted` 按 action 决定冷却/持久化**；运行前需 `npm run compile` |
+| `test/test-vision-history.mjs` | ~155 | 跨轮视觉历史编解码 + 双 API 转换器闭环测试（源自上游 opencode-go-copilot v1.9.2，含 DeepSeek 空 reasoning_content 回归用例；运行前需 `npm run compile`） |
 | `test/test-anthropic-tool-result-merge.mjs` | ~168 | Anthropic 连续工具结果合并测试（源自上游，issue #87 场景：3 个并行 tool_use 结果合并为单条 user 消息；运行前需 `npm run compile`） |
 | `test/test-cloud-sync-auto-push.mjs` | ~90 | **云同步 payload 去重测试**（18 项断言）：`syncPayloadHasChanged` 的空值/版本/长度/逐字段（value/credential/label）/顺序分支，以及 `undefined` 与 `""` 等价、`updatedAt` 不参与比较、**旧字段名 `cookie` 与 `credential` 等价（向后兼容）**；纯函数无 `vscode` 依赖，运行前需 `npm run compile` |
 | `test/test-cloud-sync-flow.mjs` | ~330 | **云同步 push/pull 集成测试**（22 项断言）：通过 `Module._load` 钩子注入 `vscode` mock + mock `fetch`，驱动真实 `pushToCloud`/`pullFromCloud` 流程——push 新建/PATCH/无变更短路/空 store 警告、**push 记录服务端 `updated_at`（回归：曾记录客户端时间导致 push 后必然多拉一次）**、pull 合并（credential/label 覆盖 + 可用性保留 + 追加新 key）/静默跳过/缓存 gist 失效回退；运行前需 `npm run compile` |
 | `test/test-cloud-sync-e2e.mjs` | ~250 | **云同步真实端到端测试**（16 项断言，`npm run test:e2e`）：用**真实 GitHub Gist API** 驱动生产 `pushToCloud`/`pullFromCloud`，验证 mock 无法覆盖的部分（真实请求体格式/响应结构/`updated_at`/内容往返）。安全设计：创建**专用测试 Gist**（描述带随机后缀）并预置其 id 到 `globalState`，**绝不触碰用户真实同步 Gist**；finally 中删除测试 Gist。凭据从 `GITHUB_TOKEN`/`GH_TOKEN` 或 `gh auth token` 读取，无凭据时 SKIP 退出 0；运行前需 `npm run compile` |
-| `test/test-*.mjs`（其余） | — | 令牌应用 / 封号检测 / 封号轮换 / 模型差异 / Responses 复检 / 视觉能力检查等专项测试 |
 
 ---
 
@@ -778,14 +783,11 @@ OpenAI 格式轮次：assistant `tool_calls` + `tool` role 消息；DeepSeek 兼
 
 ### 4.1i `src/provider/errors.ts`
 
-#### `REASON_TEXT: Record<string, string>`
-key 轮换失败原因 → 人类可读标签（l10n key）：`balance`/`invalid`/`rate_limited`/`server_error`/`api_error`/`unavailable`/`banned`。
-
 #### `checkZeroAnswerBudgetExhausted(api, collectedOutputText, modelId): void`
 零正文预算耗尽检测：流式处理结束后，若结束原因为 `length`/`max_tokens` 且累计正文为空，抛出友好错误并记录 `request.zeroAnswer` 日志——避免思考模型把 max_tokens 预算全部耗在推理后静默返回空流。
 
 #### `buildAllKeysUnavailableDetail(secrets): Promise<string>`
-构建"全部 API Key 均不可用"的脱敏原因详情：遍历 store 中每个 key，用 `getKeyUnavailableReason` 取当前状态原因，生成 `sk_****abcd: 服务端繁忙 (503)` 列表（`; ` 连接）。
+构建"全部 API Key 均不可用"的脱敏原因详情：遍历 store 中每个 key，用 `getKeyUnavailableReason` 取当前状态的可读原因（冷却中→规则 message / 持久化不可用→"不可用" / 未检测→"未检测"），生成 `sk_****abcd: 限流` 列表（`; ` 连接）。
 
 #### `tryTransientRetryRound(secrets, retryCount, maxRetries): Promise<boolean>`
 瞬态失败（429/500/503）整轮自动重试辅助。达到上限返回 false；否则**清空瞬态冷却**（`resetExhaustedKeys(secrets, false)`，不触碰持久化 unavailable——冷却期间 `pickNextApiKey` 会跳过全部 key 使重试无效）、指数退避等待（2s/4s/8s，上限 8s）后返回 true。两种调用场景：① 全部 key 均因瞬态错误失败（429/503）→ 清冷却后重试整轮让 key 重新可选；② 平台侧错误但 key 无问题（如 500）→ 不标记 key，仅退避后重试同一个 key。

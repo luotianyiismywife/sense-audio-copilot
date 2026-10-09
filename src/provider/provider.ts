@@ -37,7 +37,7 @@ import { runKeyRotationLoop } from "./rotation";
 import { executeApiRequest } from "./apiDispatch";
 
 // Re-export for backward compatibility (gitCommit imports these from provider).
-export { REASON_TEXT, buildAllKeysUnavailableDetail, tryTransientRetryRound } from "./errors";
+export { buildAllKeysUnavailableDetail, tryTransientRetryRound } from "./errors";
 
 /**
  * VS Code Chat provider backed by SenseAudio API.

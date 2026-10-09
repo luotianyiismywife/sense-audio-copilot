@@ -116,11 +116,6 @@ const zhCN: Record<string, string> = {
 	"Unable to determine availability, please retry later": "无法确定可用性，请稍后重试",
 	"All API keys are temporarily unavailable ({0}). Please retry later.": "所有 API Key 暂时不可用（{0}），请稍后重试。",
 	"All API keys are unavailable ({0}). Use the Manage API Keys command to check availability.": "所有 API Key 均不可用（{0}）。请使用「管理 API Keys」命令检测可用性。",
-	"Balance insufficient": "余额不足",
-	"Key invalid": "Key 无效",
-	"Rate limited (429)": "限流 (429)",
-	"Server error (503)": "服务端繁忙 (503)",
-	"API error": "API 错误",
 	"Current API key is out of balance, switched to {0} and set it as the current key": "当前 API Key 余额不足，已切换到 {0} 并设为当前使用",
 	"Current API key is unavailable ({0}). Single mode only switches keys on insufficient balance (402); retry later or check via the Manage API Keys command.":
 		"当前 API Key 不可用（{0}）。single 模式仅在余额不足（402）时才自动切换 key；请稍后重试，或使用「管理 API Keys」命令检测/切换。",

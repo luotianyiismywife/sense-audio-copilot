@@ -1,22 +1,9 @@
 import * as vscode from "vscode";
 import type { LanguageModelResponsePart, Progress, ProvideLanguageModelChatResponseOptions } from "vscode";
-import { l10n, l10nFormat } from "../core/localize";
+import { l10nFormat } from "../core/localize";
 import { logger } from "../core/logger";
 import type { CommonApi, StreamUsage } from "../api/commonApi";
 import { getApiKeyStore, getKeyUnavailableReason, maskApiKey, resetExhaustedKeys } from "../keys/keyManager";
-
-/**
- * Human-readable labels for key rotation failure reasons (keys are l10n keys).
- */
-export const REASON_TEXT: Record<string, string> = {
-    balance: "Balance insufficient",
-    invalid: "Key invalid",
-    rate_limited: "Rate limited (429)",
-    server_error: "Server error (503)",
-    api_error: "API error",
-    unavailable: "Unavailable",
-    banned: "Account banned (billing frozen)",
-};
 
 /**
  * Detect a finished stream that exhausted its token budget (finish/stop reason
@@ -54,16 +41,13 @@ export function checkZeroAnswerBudgetExhausted(
 
 /**
  * 构建"全部 API Key 均不可用"的脱敏原因详情（供报错信息展示）。
- * 遍历 store 中每个 key，用其当前状态（冷却中 / 持久化不可用 / 余额不足）
+ * 遍历 store 中每个 key，用其当前状态（冷却中 / 持久化不可用 / 未检测）
  * 生成 `sk_****abcd: 原因` 列表。
  */
 export async function buildAllKeysUnavailableDetail(secrets: vscode.SecretStorage): Promise<string> {
     const store = await getApiKeyStore(secrets);
     return store.keys
-        .map((entry) => {
-            const reason = getKeyUnavailableReason(entry);
-            return `${maskApiKey(entry.value)}: ${l10n(REASON_TEXT[reason] ?? reason)}`;
-        })
+        .map((entry) => `${maskApiKey(entry.value)}: ${getKeyUnavailableReason(entry)}`)
         .join("; ");
 }
 
