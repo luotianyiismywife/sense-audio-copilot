@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import { CancellationToken, LanguageModelChatInformation, PrepareLanguageModelChatModelOptions } from "vscode";
 
 import { logger } from "../core/logger";
-import { getBuiltInModelInfos, getMaxInputTokensRatio } from "./models";
+import { getBuiltInModelInfos, getBuiltInModelConfig, getMaxInputTokensRatio } from "./models";
 import { getApiModelIds, getApiModelMetadataList, getResponsesSupportedModelIds, getAnthropicSupportedModelIds, isApiFetchSuccessful, type ApiModelMetadata } from "./apiModelList";
 import { ensureModelsDevLoaded, lookupModelDevEntry, type ModelsDevEntry } from "./modelsDev";
 import { resolveVisionCapability } from "./visionModels";
@@ -192,6 +192,23 @@ export function getAutoDiscoveredModelConfig(modelId: string): SenseAudioModelIt
     // copy those mutations would leak into subsequent requests reusing the
     // stored object (e.g. a stale reasoning_effort from a previous turn).
     return { ...config };
+}
+
+/**
+ * Best-effort check whether a model ID is vision-capable, using the built-in
+ * definitions and the auto-discovered configs.
+ *
+ * Used to guard the vision proxy against a misconfigured `visionProxyModel`:
+ * pointing it at a NON-vision model would make the vision request itself trigger
+ * the ask_image proxy again → recursion. Returns `undefined` when the model is
+ * unknown (caller should not block on an unknown model).
+ *
+ * Accepts a bare ID or a vendor-qualified ID (`senseaudio/qwen3.6-35b-a3b`).
+ */
+export function isVisionCapableModelId(modelId: string): boolean | undefined {
+    const bare = modelId.includes("/") ? modelId.substring(modelId.lastIndexOf("/") + 1) : modelId;
+    const cfg = getBuiltInModelConfig(bare) ?? getAutoDiscoveredModelConfig(bare);
+    return cfg?.vision;
 }
 
 /**

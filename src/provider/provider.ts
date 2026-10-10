@@ -153,9 +153,14 @@ export class SenseAudioChatModelProvider implements LanguageModelChatProvider {
     ): Promise<void> {
         let usageReportedDuringStream = false;
         const collectedOutputText: string[] = [];
+        // Set true once ANY part is reported to the user. The rotation loop uses
+        // this to avoid re-running the request after partial output was already
+        // shown (re-running would duplicate the visible answer).
+        let hasEmittedOutput = false;
         const trackingProgress: Progress<LanguageModelResponsePart> = {
             report: (part) => {
                 try {
+                    hasEmittedOutput = true;
                     if (part instanceof vscode.LanguageModelTextPart) {
                         collectedOutputText.push(part.value);
                     }
@@ -270,6 +275,7 @@ export class SenseAudioChatModelProvider implements LanguageModelChatProvider {
                 abortController,
                 apiMode,
                 customHeaders: um?.headers,
+                hasEmittedOutput: () => hasEmittedOutput,
                 onFallbackSwitch: (entry) => {
                     vscode.window.showInformationMessage(
                         l10nFormat(

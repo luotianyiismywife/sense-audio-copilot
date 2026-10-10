@@ -53,6 +53,7 @@ const zhCN: Record<string, string> = {
 
 	// vision proxy
 	"Querying vision model: \"{0}\"": "正在根据图片提问：{0}",
+	"The configured vision model ({0}) does not support image input. Set senseaudio.visionProxyModel to a vision-capable model.": "配置的视觉模型（{0}）不支持图片输入。请将 senseaudio.visionProxyModel 设为支持视觉的模型。",
 	"The image you sent was flagged as sensitive by the content moderation system. Please try a different image.": "您发送的图片被内容审核系统判定为敏感，请尝试更换图片。",
 
 	// keyManager.ts - API Key management

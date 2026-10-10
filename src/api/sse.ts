@@ -157,13 +157,23 @@ export async function consumeSseStream(
 ): Promise<void> {
     const { tag, modelId, onEvent, onDone, onFinally } = options;
     logger.debug(`${tag}.stream.start`, { modelId });
+    let doneCalled = false;
     try {
         for await (const event of iterateSseEvents(responseBody, options)) {
             if (event.done) {
                 await onDone?.();
+                doneCalled = true;
                 continue;
             }
             await onEvent(event.parsed, event.raw);
+        }
+        // Stream ended WITHOUT a `[DONE]` sentinel (connection closed cleanly,
+        // or a provider that never sends it). Still flush the end-of-stream
+        // work (e.g. buffered tool calls) — otherwise tool calls are silently
+        // dropped. `onDone` is idempotent (flushToolCallBuffers returns early
+        // when empty), so calling it here is safe even if `[DONE]` was seen.
+        if (!doneCalled) {
+            await onDone?.();
         }
         logger.debug(`${tag}.stream.done`, { modelId });
     } catch (e) {

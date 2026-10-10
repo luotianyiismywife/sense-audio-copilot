@@ -20,6 +20,7 @@ import {
 } from "../vision/types";
 import { createVisionToolHistoryPart } from "../vision/historyPart";
 import type { VisionToolHistoryEntry } from "../vision/historyCodec";
+import { isVisionCapableModelId } from "../models/provideModel";
 import { VisionRoundError } from "./errors";
 
 /**
@@ -75,6 +76,32 @@ export async function handleInterceptedToolCall(params: VisionRoundParams): Prom
     // silently drop every vision call (loop never runs).
     const rawMaxRounds = config.get<number>("senseaudio.visionMaxRounds", 5);
     const maxRounds = Number.isFinite(rawMaxRounds) ? Math.min(20, Math.max(1, Math.floor(rawMaxRounds))) : 5;
+
+    // Guard against a misconfigured visionProxyModel. The main model is ALWAYS
+    // non-vision here (otherwise the image would have been sent directly), so
+    // pointing the proxy at the same model — or at any known non-vision model —
+    // would make the vision request trigger the ask_image proxy again → recursion.
+    const bareVisionId = visionModelId.includes("/")
+        ? visionModelId.substring(visionModelId.lastIndexOf("/") + 1)
+        : visionModelId;
+    const bareMainId = params.model.id.includes("/")
+        ? params.model.id.substring(params.model.id.lastIndexOf("/") + 1)
+        : params.model.id;
+    if (bareVisionId === bareMainId || isVisionCapableModelId(visionModelId) === false) {
+        logger.warn("vision.proxyModelNotVisionCapable", {
+            visionModelId,
+            mainModelId: params.model.id,
+        });
+        params.trackingProgress.report(
+            new vscode.LanguageModelThinkingPart(
+                l10nFormat(
+                    "The configured vision model ({0}) does not support image input. Set senseaudio.visionProxyModel to a vision-capable model.",
+                    visionModelId
+                )
+            ) as unknown as LanguageModelResponsePart
+        );
+        return;
+    }
 
     // Accumulate messages across rounds
     let currentMessages: Record<string, unknown>[] = [...(storedMessages as Record<string, unknown>[])];

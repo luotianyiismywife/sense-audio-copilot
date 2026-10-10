@@ -568,6 +568,7 @@ test/                                     # 测试脚本（运行前需 npm run 
 ├── test-anthropic-image-index.mjs        # Anthropic 图片索引顺序测试（3 项断言，回归：延迟分配导致索引错位）
 ├── test-anthropic-vision-order.mjs       # Anthropic 视觉历史顺序测试（2 项断言，回归：先推视觉历史导致顺序颠倒）
 ├── test-image-dimensions.mjs             # 图片尺寸解析测试（5 项断言，回归：PNG 签名检测错误）
+├── test-sse-stream.mjs                   # SSE 流消费测试（3 项断言，回归：无 [DONE] 时工具调用被丢弃）
 ├── test-batch-import.mjs                 # 批量导入解析器测试（14 项断言）
 ├── test-cloud-sync-auto-push.mjs         # 云同步 payload 去重测试（18 项断言，纯函数无 vscode 依赖）
 ├── test-cloud-sync-flow.mjs              # 云同步 push/pull 集成测试（22 项断言，mock fetch + mock vscode）
@@ -660,6 +661,7 @@ test/                                     # 测试脚本（运行前需 npm run 
 | `test/test-anthropic-image-index.mjs` | ~120 | **Anthropic 图片索引顺序测试**（3 项断言）：图片索引按 part 顺序内联分配，与 `collectLocalImages` 存储顺序一致（回归：曾延迟分配导致同一消息内混排 image DataPart 与文本 data-URI 图片时索引错位）；运行前需 `npm run compile` |
 | `test/test-anthropic-vision-order.mjs` | ~150 | **Anthropic 视觉历史顺序测试**（2 项断言）：缓冲的工具结果先于视觉历史输出，视觉 tool_use 紧跟其 tool_result（回归：曾先推视觉历史导致顺序颠倒）；运行前需 `npm run compile` |
 | `test/test-image-dimensions.mjs` | ~60 | **图片尺寸解析测试**（5 项断言）：PNG / GIF / JPEG / WebP 尺寸解析（回归：PNG 签名检测错误导致返回 unknown）；运行前需 `npm run compile` |
+| `test/test-sse-stream.mjs` | ~90 | **SSE 流消费测试**（3 项断言）：`[DONE]` 触发 onDone、**无 `[DONE]` 哨兵时也触发 onDone**（回归：曾只在 `[DONE]` 时刷新，导致工具调用被静默丢弃）、onFinally 始终触发；运行前需 `npm run compile` |
 | `test/test-cloud-sync-auto-push.mjs` | ~90 | **云同步 payload 去重测试**（18 项断言）：`syncPayloadHasChanged` 的空值/版本/长度/逐字段（value/credential/label）/顺序分支，以及 `undefined` 与 `""` 等价、`updatedAt` 不参与比较、**旧字段名 `cookie` 与 `credential` 等价（向后兼容）**；纯函数无 `vscode` 依赖，运行前需 `npm run compile` |
 | `test/test-cloud-sync-flow.mjs` | ~330 | **云同步 push/pull 集成测试**（22 项断言）：通过 `Module._load` 钩子注入 `vscode` mock + mock `fetch`，驱动真实 `pushToCloud`/`pullFromCloud` 流程——push 新建/PATCH/无变更短路/空 store 警告、**push 记录服务端 `updated_at`（回归：曾记录客户端时间导致 push 后必然多拉一次）**、pull 合并（credential/label 覆盖 + 可用性保留 + 追加新 key）/静默跳过/缓存 gist 失效回退；运行前需 `npm run compile` |
 | `test/test-cloud-sync-e2e.mjs` | ~250 | **云同步真实端到端测试**（16 项断言，`npm run test:e2e`）：用**真实 GitHub Gist API** 驱动生产 `pushToCloud`/`pullFromCloud`，验证 mock 无法覆盖的部分（真实请求体格式/响应结构/`updated_at`/内容往返）。安全设计：创建**专用测试 Gist**（描述带随机后缀）并预置其 id 到 `globalState`，**绝不触碰用户真实同步 Gist**；finally 中删除测试 Gist。凭据从 `GITHUB_TOKEN`/`GH_TOKEN` 或 `gh auth token` 读取，无凭据时 SKIP 退出 0；运行前需 `npm run compile` |
@@ -760,7 +762,7 @@ test/                                     # 测试脚本（运行前需 npm run 
 ### 4.1f `src/provider/rotation.ts`
 
 #### `runKeyRotationLoop(params): Promise<void>`
-多 API Key 轮换循环。每轮选一个 key，跳过余额不足（凭据主动预检）或返回轮换错误（401/402/429/503，状态码与文本 patterns 可配置）的 key。全部 key 用尽时列出脱敏 key + 失败原因；若失败均为瞬态（429/503）则按 `senseaudio.transientRetryTimes` 指数退避重试整轮。**平台侧瞬态错误（500）强制同 key 重试**：`forceKey` 记住当前 key，下一轮强制复用（rotation 模式游标已前移，不强制会静默换 key，违背"500 不换 key"承诺）。**重试计数器按场景分离**：`wholeRoundRetryCount`（全部 key 瞬态失败/无可用 key 整轮重试）与 `sameKeyRetryCount`（500 同 key 重试）独立计数，500 重试不消耗 429/503 整轮配额。single 模式 fallback=switch 时在 active key 命中 `rotatePersist` 时切换并经 `setActiveKeyByValue` 设为当前（`onFallbackSwitch` 回调触发通知）。参数：`secrets` / `token` / `abortController` / `execute(apiKey, requestHeaders)` / `customHeaders` / `apiMode` / `onFallbackSwitch`。
+多 API Key 轮换循环。每轮选一个 key，跳过余额不足（凭据主动预检）或返回轮换错误（401/402/429/503，状态码与文本 patterns 可配置）的 key。全部 key 用尽时列出脱敏 key + 失败原因；若失败均为瞬态（429/503）则按 `senseaudio.transientRetryTimes` 指数退避重试整轮。**平台侧瞬态错误（500）强制同 key 重试**：`forceKey` 记住当前 key，下一轮强制复用（rotation 模式游标已前移，不强制会静默换 key，违背"500 不换 key"承诺）。**重试计数器按场景分离**：`wholeRoundRetryCount`（全部 key 瞬态失败/无可用 key 整轮重试）与 `sameKeyRetryCount`（500 同 key 重试）独立计数，500 重试不消耗 429/503 整轮配额。single 模式 fallback=switch 时在 active key 命中 `rotatePersist` 时切换并经 `setActiveKeyByValue` 设为当前（`onFallbackSwitch` 回调触发通知）。**已输出则不换 key**：`hasEmittedOutput()` 为 true（流中途失败、已向用户输出部分内容）时直接抛出、不轮换——重跑会把已显示的答案再输出一遍（与 `commitMessageGenerator` 的 `response.length` 保护一致）。参数：`secrets` / `token` / `abortController` / `execute(apiKey, requestHeaders)` / `customHeaders` / `apiMode` / `hasEmittedOutput` / `onFallbackSwitch`。
 
 ---
 
@@ -774,7 +776,7 @@ test/                                     # 测试脚本（运行前需 npm run 
 ### 4.1h `src/provider/visionRounds.ts`
 
 #### `handleInterceptedToolCall(params): Promise<void>`
-图片代理（ask_image）多轮处理。非视觉模型收到图片时 `convertMessages` 把图片替换为文本引用并存入实例的 `localImages`；模型调用 `ask_image` / `ask_with_multi_image` 被 `CommonApi` 拦截到 `interceptedToolCall`。本函数：① 用模型的具体提问调用视觉模型（流式转发到 thinking 块）；② 输出跨轮视觉历史 DataPart（VS Code 自动带入下一轮对话）；③ 构建 assistant tool_call + tool result 消息并再次请求；④ 若模型再次调用 ask_image 则继续下一轮（最多 `senseaudio.visionMaxRounds` 次，**代码夹取 [1,20]**——schema 的 minimum/maximum 仅在 UI 警告，settings.json 直设 0/负数会导致视觉调用被静默丢弃）。**视觉代理轮内失败不触发 key 轮换**（主请求已成功、tool 上下文已建立，换 key 会不一致），包装为 `VisionRoundError` 直接报错由用户重试整个请求。
+图片代理（ask_image）多轮处理。非视觉模型收到图片时 `convertMessages` 把图片替换为文本引用并存入实例的 `localImages`；模型调用 `ask_image` / `ask_with_multi_image` 被 `CommonApi` 拦截到 `interceptedToolCall`。本函数：① 用模型的具体提问调用视觉模型（流式转发到 thinking 块）；② 输出跨轮视觉历史 DataPart（VS Code 自动带入下一轮对话）；③ 构建 assistant tool_call + tool result 消息并再次请求；④ 若模型再次调用 ask_image 则继续下一轮（最多 `senseaudio.visionMaxRounds` 次，**代码夹取 [1,20]**——schema 的 minimum/maximum 仅在 UI 警告，settings.json 直设 0/负数会导致视觉调用被静默丢弃）。**视觉模型自引用/非视觉校验**：`visionProxyModel` 等于主模型（主模型必为非视觉，否则图片会直接发送）或已知非视觉模型时，直接提示并返回（否则视觉请求会再次触发 ask_image 代理 → 递归）。**视觉代理轮内失败不触发 key 轮换**（主请求已成功、tool 上下文已建立，换 key 会不一致），包装为 `VisionRoundError` 直接报错由用户重试整个请求。
 
 #### `runAnthropicRound(params, api, currentMessages, intercepted, description, hasLocalImages, roundAbortController): Promise<void>`（模块级私有）
 Anthropic 格式轮次：`tool_use` + `tool_result` content block；恢复 `system` 与 `thinking` 配置（启用→`{ type: "enabled", budget_tokens: 8192 }` / adaptive→`{ type: "adaptive" }` / 禁用→`{ type: "disabled" }`）；工具用 Anthropic 格式（`name`/`description`/`input_schema`）。
@@ -821,7 +823,7 @@ OpenAI 格式轮次：assistant `tool_calls` + `tool` role 消息；DeepSeek 兼
 逐条产出 SSE 事件。负责 reader 生命周期、`data:` 前缀解析、`[DONE]` 哨兵、取消回调注册（`token.onCancellationRequested` / `signal` abort）与 finally 清理。解析失败的 chunk 记录日志并跳过（不中断流）。
 
 #### `consumeSseStream(responseBody, options): Promise<void>`
-回调式消费 SSE 流（`onEvent` / `onDone` / `onFinally`），统一处理开始/结束/错误日志与 finally 清理。三协议 `processStreamingResponse` 共用。
+回调式消费 SSE 流（`onEvent` / `onDone` / `onFinally`），统一处理开始/结束/错误日志与 finally 清理。三协议 `processStreamingResponse` 共用。**`onDone` 在收到 `[DONE]` 或流自然结束（无 `[DONE]` 哨兵）时均触发一次**——否则连接干净关闭时缓冲的工具调用会被静默丢弃（`onDone` 幂等，`flushToolCallBuffers` 空时提前返回）。
 
 ---
 
@@ -1194,6 +1196,9 @@ API 实现的抽象基类。
 
 #### `getAutoDiscoveredModelConfig(modelId): SenseAudioModelItem | undefined`
 返回之前自动发现的模型配置（**返回浅拷贝**——provider.ts 每次请求会就地修改返回对象（enable_thinking、temperature、reasoning_effort 等），不拷贝会把上一次请求的修改泄漏到后续请求）。由 `provider.ts` 在 `getBuiltInModelConfig()` 返回 undefined 时作为回退调用。两源均未知输出上限时 `max_completion_tokens` 字段**不设置**（请求体不发送输出上限，交由服务端默认值）。
+
+#### `isVisionCapableModelId(modelId): boolean | undefined`
+尽力判断模型 ID 是否支持视觉（查内置定义 + 自动发现配置）。供视觉代理守卫使用：`visionProxyModel` 指向非视觉模型时视觉请求会再次触发 ask_image 代理 → 递归。未知模型返回 `undefined`（调用方不应因此阻断）。接受裸 ID 或带 vendor 前缀的完整 ID。
 
 ---
 

@@ -46,6 +46,12 @@ export interface RotationLoopParams {
     customHeaders?: Record<string, string>;
     /** 协议模式，用于构造请求头（anthropic 用 x-api-key）。 */
     apiMode: string;
+    /**
+     * 是否已向用户输出过内容（文本/推理/工具调用）。若为 true，则**不再换 key
+     * 重跑**——重跑会把已显示的答案再输出一遍。由 provider.ts 的 progress 包装
+     * 维护。
+     */
+    hasEmittedOutput?: () => boolean;
     /** 成功使用 fallback key 后的通知回调（single 模式余额不足自动切换）。 */
     onFallbackSwitch?: (entry: ApiKeyEntry) => void;
 }
@@ -198,6 +204,16 @@ export async function runKeyRotationLoop(params: RotationLoopParams): Promise<vo
                 logger.warn("key.visionRoundFailed", {
                     key: maskApiKey(currentEntry.value),
                     error: err.message,
+                });
+                throw err;
+            }
+            // 已向用户输出过内容（流中途失败）：换 key 重跑会把已显示的答案再输出
+            // 一遍。直接抛出，不轮换（与 commitMessageGenerator 的 response.length
+            // 保护一致）。
+            if (params.hasEmittedOutput?.()) {
+                logger.warn("key.rotationSkippedAfterOutput", {
+                    key: maskApiKey(currentEntry.value),
+                    error: err instanceof Error ? err.message : String(err),
                 });
                 throw err;
             }
