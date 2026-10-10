@@ -25,6 +25,7 @@ import {
     convertToolsToOpenAI,
     mapRole,
     replaceDataUriImages,
+    parseToolCallArguments,
 } from "../../core/utils";
 
 import { CommonApi, StreamUsage } from "../commonApi";
@@ -477,13 +478,48 @@ export class OpenaiApi extends CommonApi<OpenAIChatMessage, Record<string, unkno
             }
 
             for (const tc of toolCalls) {
-                const idx = (tc.index as number) ?? 0;
+                // Buffer key: prefer the tool call id (stable across chunks even
+                // when the provider omits or repeats `index`), then index, then
+                // the last seen key, then an auto sequence. Never default to 0 —
+                // some OpenAI-compatible providers (e.g. GLM) emit parallel tool
+                // calls all with index 0 or without index, which would merge
+                // fragments of different calls into one corrupted buffer.
+                //
+                // ⚠️ 平台兼容层坑点（2026-10-10 实测，移植到其他平台时勿删）：
+                // GLM 走 OpenAI 兼容接口时流式 tool_calls 不符合标准协议：
+                // ① 并行调用不给 index 或全给 0（标准要求唯一递增）——默认 0 会把
+                //    不同调用的参数片段拼进同一缓冲产出 `{...}{...}` 半截 JSON；
+                // ② arguments 偶发被 ```json 围栏包裹/前后混说明文字/尾逗号/
+                //    中文智能引号/单引号——flush 侧用 parseToolCallArguments 容错；
+                // ③ finish_reason=length 时 JSON 只写一半（流截断）。
+                // 新平台接入先跑 scripts/dev/probe-api.mjs 验证流式工具调用格式。
+                //
+                // **为什么更兼容且对标准协议零损害**：分桶键的每一级回退只在
+                // 上游偏离标准时才生效——标准 chunk 都带 id 和 index，走第一级
+                // `id`，与标准行为完全一致；缺 index 的回退（上一个 key/自增
+                // 序号）对标准输入不可达。实测（2026-10-10）：8 个模型 × 2/4 路
+                // 并行 × 开/关思考各 3 次探测中所有模型均带唯一递增 index 且
+                // arguments 干净，此防御对标准上游零影响；报错仅集中在 GLM
+                // 超长上下文（1624 条消息）+ 146 秒长流式输出场景。
+                const tcId = typeof tc.id === "string" && tc.id ? tc.id : undefined;
+                const tcIndex = typeof tc.index === "number" ? String(tc.index) : undefined;
+                let idx: string;
+                if (tcId) {
+                    idx = tcId;
+                } else if (tcIndex) {
+                    idx = tcIndex;
+                } else if (this._lastToolCallKey) {
+                    idx = this._lastToolCallKey;
+                } else {
+                    idx = `auto_${this._toolCallBuffers.size}`;
+                }
+                this._lastToolCallKey = idx;
                 if (this._completedToolCallIndices.has(idx)) {
                     continue;
                 }
                 const buf = this._toolCallBuffers.get(idx) ?? { args: "" };
-                if (tc.id && typeof tc.id === "string") {
-                    buf.id = tc.id as string;
+                if (tcId) {
+                    buf.id = tcId;
                 }
                 const func = tc.function as Record<string, unknown> | undefined;
                 if (func?.name && typeof func.name === "string") {
@@ -494,7 +530,10 @@ export class OpenaiApi extends CommonApi<OpenAIChatMessage, Record<string, unkno
                 }
                 this._toolCallBuffers.set(idx, buf);
 
-                await this.tryEmitBufferedToolCall(idx, progress);
+                // 不在每个 delta 后尝试发射：流式参数的严格前缀本身可能是合法
+                // JSON（如 `{"path":"a.ts"}` 是 `{"path":"a.ts","startLine":1}` 的
+                // 前缀），提前发射会永久丢失后续参数。发射统一延迟到
+                // finish_reason 时的 flushToolCallBuffers（与 Responses 路径一致）。
             }
         }
 

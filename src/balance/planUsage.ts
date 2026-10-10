@@ -374,16 +374,12 @@ export function formatBillingModeLine(snapshot: PlanUsageSnapshot | null): strin
 }
 
 /**
- * 构建一行余额摘要，如 `¥12.34` 或 `¥12.34 + 赠送 ¥5.00`。
+ * 构建一行余额摘要，如 `¥12.34`（现金+代金券合计，2026-10-10 改版：
+ * 不再分开显示赠送金额，直接显示合计可用余额）。
  */
 export function formatBalanceSummary(snapshot: PlanUsageSnapshot | null): string {
     if (!snapshot) {
         return "";
     }
-    const { cashCny, voucherCny } = snapshot.balance;
-    const parts = [`¥${cashCny.toFixed(2)}`];
-    if (voucherCny > 0) {
-        parts.push(`+ 赠送 ¥${voucherCny.toFixed(2)}`);
-    }
-    return parts.join(" ");
+    return `¥${snapshot.balance.totalCny.toFixed(2)}`;
 }

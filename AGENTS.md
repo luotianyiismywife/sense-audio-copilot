@@ -40,8 +40,8 @@
 | **Token 计数** | 使用 `o200k_base` tiktoken 分词器精确统计 token 用量 |
 | **状态栏** | 实时显示当前会话 token 使用量、累计用量、缓存命中率 |
 | **原生 Token 指示器** | 始终启用，向 Copilot Chat 原生 Token 指示器报告 token 用量。通过发送 MIME 类型为 `usage` 的 `LanguageModelDataPart`（TextEncoder 编码 JSON）实现，无需自建状态栏。依赖 VS Code/Copilot Chat 1.116+ 对外部模型 `usage` data part 的识别 |
-| **高级 Token 指示器** | 可通过 `senseaudio.enableThirdPartyTokenIndicator` 配置（**默认关闭**）控制 VS Code 状态栏中的高级Token计数器。关闭后仅显示原生指示器（原生指示器始终上报）。**状态栏可见性由 `isStatusBarEnabled()` 决定 = 高级 Token 指示器 OR 套餐用量显示（`showUsageInStatusBar` / `showUsageInTooltip`）**——不能只用 `enableThirdPartyTokenIndicator` 把关，否则套餐用量功能将永远不可见。状态栏**仅在用户实际使用本插件提供的模型时显示**：启动时隐藏，发起 senseaudio 模型请求时显示，停止使用（空闲 60 秒）后自动隐藏，避免使用其他模型时残留上下文信息 |
-| **套餐用量与余额显示** | 状态栏主文本显示**套餐用量**（对标上游 opencode-go-copilot 的 `Go 5H 65%`）：额度内显示 `$(pulse) 5H 65%`（5 小时限流窗口），额度耗尽显示 `$(pulse) 余额 ¥358.78`；悬停提示展示 5h/周/月三窗口（`5H——0% (0 / 10,000 积分)`）+ 5h 重置倒计时 + 余额 + 计费模式说明。**两套计费规则严格区分**（官方文档 token-plan）：① **周期额度**（5h/周）是**限流窗口**，耗尽后等下一周期自动恢复、**不消耗余额**；② **套餐积分**（月度 `credit_30d_limit`）才是**订阅额度**，耗尽后走超额策略——`enable_extra_usage=true` 则按量计费（代金券→现金），否则**降级 Free 版**。三态 `billingMode`：`plan`/`extra`/`free`。数据源 `GET platform.senseaudio.cn/api/user/self`（Bearer 平台登录凭据 PASETO token，取自 key store 的 `ApiKeyEntry.credential`），TTL 缓存 + **失败保留旧快照**（静默降级）。后台轮询（`senseaudio.usageRefreshInterval` 默认 5 分钟）+ 点击状态栏强制刷新。配置：`showUsageInStatusBar`（默认开，关闭则主文本改显 Token 计数）、`showUsageInTooltip`（默认开）。**⚠️ 单位陷阱**：代金券积分 `1 元 = 1,000,000 积分`（`POINTS_PER_CNY`，2026-09-27 实测校正，曾误用 5000 导致 200 倍误差），与套餐积分**不是同一单位**。实现见 `src/balance/planUsage.ts`，设计/移植指南见 `docs/plan-usage-design.md` |
+| **高级 Token 指示器** | 可通过 `senseaudio.enableThirdPartyTokenIndicator` 配置（**默认关闭**）控制 VS Code 状态栏中的高级Token计数器。关闭后仅显示原生指示器（原生指示器始终上报）。**状态栏可见性由 `isStatusBarEnabled()` 决定 = 高级 Token 指示器 OR 套餐用量显示（`showUsageInStatusBar` / `showUsageInTooltip`）**——不能只用 `enableThirdPartyTokenIndicator` 把关，否则套餐用量功能将永远不可见。**状态栏常态化显示（2026-10-10 改版）**：启动即显示并保持常显，不再静默隐藏（`scheduleStatusBarHide` 保留为空操作兼容既有调用点） |
+| **套餐用量与余额显示** | 状态栏主文本（2026-10-10 改版）：**套餐额度内**（`billingMode=plan`）显示 `$(pulse) 65% 30% 12%`（5h/周/月三窗口百分比，空格分隔）；**用余额**（`billingMode=extra/free`，月度额度耗尽）显示 `$(pulse) ¥358.78`（现金+代金券**合计**，不再分开显示赠送）。区分依据：`isPlanExhausted`（只看月度额度窗口）。悬停提示**仅套餐用量区块**（2026-10-10 改版：累计 Token 的 ↑/↓ 箭头行已移除，VS Code 原生会话 Token 指示器已覆盖）——5h/周/月三窗口（`5H——0% (0 / 10,000 积分)`）+ 5h 重置倒计时 + 余额 + 计费模式说明。**两套计费规则严格区分**（官方文档 token-plan）：① **周期额度**（5h/周）是**限流窗口**，耗尽后等下一周期自动恢复、**不消耗余额**；② **套餐积分**（月度 `credit_30d_limit`）才是**订阅额度**，耗尽后走超额策略——`enable_extra_usage=true` 则按量计费（代金券→现金），否则**降级 Free 版**。三态 `billingMode`：`plan`/`extra`/`free`。数据源 `GET platform.senseaudio.cn/api/user/self`（Bearer 平台登录凭据 PASETO token，取自 key store 的 `ApiKeyEntry.credential`），TTL 缓存 + **失败保留旧快照**（静默降级）。后台轮询（`senseaudio.usageRefreshInterval` 默认 5 分钟）+ 点击状态栏强制刷新。配置：`showUsageInStatusBar`（默认开，关闭则主文本改显 Token 计数）、`showUsageInTooltip`（默认开）。**⚠️ 单位陷阱**：代金券积分 `1 元 = 1,000,000 积分`（`POINTS_PER_CNY`，2026-09-27 实测校正，曾误用 5000 导致 200 倍误差），与套餐积分**不是同一单位**。实现见 `src/balance/planUsage.ts`，设计/移植指南见 `docs/plan-usage-design.md` |
 | **Git 提交消息生成** | 一键生成 Conventional Commit 格式的 Git 提交消息，支持 `auto` 语言模式自动从历史提交检测语言 |
 | **多仓库支持** | 支持多根工作区 (multi-root) 中多个 Git 仓库的提交消息生成 |
 | **模型预设** | 支持通过 `senseaudio.modelPreset` 设置切换 temperature/top_p 预设（🎯 Precise/⚖️ Balanced/🔥 Creative），也支持手动自定义输入 |
@@ -339,7 +339,7 @@ provideLanguageModelChatResponse(model, messages, options, progress, token)
     └── function.arguments: JSON 参数 (可能分片)
 
 处理机制:
-  1. _toolCallBuffers Map<index, {id, name, args}>
+  1. _toolCallBuffers Map<key, {id, name, args}>（key 优先用工具调用 id，其次 index，再次上一个 key，最后自增序号——部分 OpenAI 兼容端点（如 GLM）并行工具调用不给 index 或全给 0，默认 0 会把不同调用的参数片段拼进同一缓冲导致 JSON 损坏）
   2. stream 分片拼接 args
   3. tryEmitBufferedToolCall() → 参数可解析 JSON 时立即发射
   4. flushToolCallBuffers() → finish_reason 时强制发射剩余
@@ -1035,7 +1035,8 @@ API 实现的抽象基类。
 
 | 属性 | 类型 | 说明 |
 |------|------|------|
-| `_toolCallBuffers` | `Map<number, {id?, name?, args}>` | 工具调用参数缓冲区 |
+| `_toolCallBuffers` | `Map<string, {id?, name?, args}>` | 工具调用参数缓冲区（key 优先 id / 其次 index / 再次上一个 key / 最后自增序号） |
+| `_lastToolCallKey` | `string \| undefined` | 最近一次缓冲的工具调用 key（无 id/index 的 chunk 兑底归属） |
 | `_completedToolCallIndices` | `Set<number>` | 已完成发射的工具调用索引 |
 | `_hasEmittedAssistantText` | `boolean` | 是否已发射过助手文本 |
 | `_emittedBeginToolCallsHint` | `boolean` | 是否已发射工具调用前导空格 |
@@ -1064,7 +1065,7 @@ API 实现的抽象基类。
 当工具调用的名称和 JSON 参数都可用时，尝试发射缓冲的工具调用。跳过 `ask_image` 和 `ask_with_multi_image` 工具（由 provider 处理）。
 
 #### `protected flushToolCallBuffers(progress, throwOnInvalid): Promise<void>`
-清空所有工具调用缓冲区，发射剩余的工具调用。拦截 `ask_image` 和 `ask_with_multi_image` 存入 `interceptedToolCall`。
+清空所有工具调用缓冲区，发射剩余的工具调用。拦截 `ask_image` 和 `ask_with_multi_image` 存入 `interceptedToolCall`。参数解析经 `parseToolCallArguments` 容错处理（剥围栏/去杂质/修复式解析），解析失败且 `throwOnInvalid` 时抛错（错误日志含 idx/name/前 200 字符 snippet）。
 
 #### `public getStoredImage(imageIndex): StoredImage | undefined`
 从实例的 `_localImages` 数组中按索引获取存储的图片数据。
@@ -1271,6 +1272,9 @@ API 实现的抽象基类。
 #### `tryParseJSONObject(text): { ok: true, value } | { ok: false }`
 安全尝试解析 JSON 对象字符串。
 
+#### `parseToolCallArguments(raw): Record<string, unknown> | undefined`（2026-10-10 新增）
+容错解析流式工具调用参数字符串（GLM 等兼容端点偶发参数不干净）。处理顺序：① trim；② 剥 markdown 代码围栏（```json ... ```）；③ 剥首尾非 JSON 杂质（首个 `{` 前 / 末个 `}` 后的文字）；④ 空串/undefined 兑底 `{}`；⑤ 严格解析失败后走修复式解析 `repairJsonText`（智能引号→直引号、尾逗号、单引号字符串、未闭合括号/引号补全——流截断场景），修复后重试。全部失败返回 undefined（调用方决定抛错或跳过）。三协议工具调用解析共用（`commonApi.flushToolCallBuffers` / `responsesApi`）。
+
 ---
 
 ### 4.11 `src/vision/types.ts`
@@ -1369,7 +1373,7 @@ ask_image 工具定义的 OpenAI 格式（`type: "function"`），包含 `imageI
 状态栏可见性总开关 = `enableThirdPartyTokenIndicator` OR `showUsageInStatusBar` OR `showUsageInTooltip`。**不可只用 `enableThirdPartyTokenIndicator` 把关**（默认 false，会导致套餐用量永远不可见）。
 
 #### `scheduleStatusBarHide(statusBarItem, delayMs?): void`
-调度状态栏自动隐藏（默认空闲 60 秒后隐藏，可被下一次请求取消）。在请求结束（finally）时调用，确保切换其他模型后状态栏不会残留。
+**2026-10-10 改版：空操作**——状态栏常态化显示，不再自动隐藏。保留函数签名兼容既有调用点（provider.ts 的 finally），后续可移除。
 
 #### `refreshPlanUsageNow(): Promise<PlanUsageSnapshot | null>`
 强制立即刷新套餐用量（`senseaudio.checkUsage` 命令与点击状态栏使用）：`getPlanUsageCached(token, true)` 绕过 TTL 强制拉取，完成后重渲染主文本与 tooltip 并返回快照。无凭据时返回 null。**并发保护**：后台刷新在途时（`usageRefreshInFlight`）不重复发起，直接返回当前缓存快照（`getPlanUsageSnapshot()`），避免穿透 in-flight 标志形成并发请求。
@@ -1393,10 +1397,10 @@ API 返回用量数据后重渲染状态栏。`showUsageInStatusBar` 开启时**
 将流式用量累计到全局计数器。
 
 #### `updateCumulativeTooltip(statusBarItem): void`
-更新状态栏工具提示：累计输入/输出 Token 数、缓存命中率，以及（启用且有缓存时）套餐用量区块（三窗口 + 5h 重置倒计时 + 余额 + 计费模式说明）。
+更新状态栏工具提示（2026-10-10 改版）：**仅套餐用量区块**（三窗口 + 5h 重置倒计时 + 余额 + 计费模式说明）。累计 Token 部分（↑/↓ 箭头行）已移除——VS Code 原生会话 Token 指示器已覆盖该信息。
 
 #### `updateStatusBarUsageText(statusBarItem): void`（模块级私有）
-渲染状态栏主文本：额度内 `$(pulse) 5H 65%` / 额度耗尽 `$(pulse) 余额 ¥358.78` / 无数据 `$(pulse) --`。`showUsageInStatusBar` 关闭时直接返回（由 Token 计数接管）。
+渲染状态栏主文本（2026-10-10 改版）：套餐额度内 `$(pulse) 65% 30% 12%`（5h/周/月三窗口百分比，空格分隔）/ 用余额（月度额度耗尽）`$(pulse) ¥358.78`（现金+代金券合计）/ 无数据 `$(pulse) --`。`showUsageInStatusBar` 关闭时恢复 Token 计数文本。
 
 #### `appendPlanUsageTooltipLines(lines): void`（模块级私有）
 将套餐用量区块追加到 tooltip 行数组：配置关闭或无缓存时直接返回；每个窗口一行（`5H——0% (0 / 10,000 积分)`）+ 5h 重置倒计时行 + 余额行 + 计费模式说明行。
@@ -1643,7 +1647,7 @@ Anthropic 请求体。包含 `model`, `messages`, `max_tokens`, `system`, `strea
 尝试发射缓冲的 function_call 为 LanguageModelToolCallPart。ask_image/ask_with_multi_image 被拦截存入 interceptedToolCall。
 
 #### `private flushResponsesToolCalls(progress, throwOnInvalid): Promise<void>`
-清空所有缓冲的 function_call，发射剩余工具调用（流结束时调用）。
+清空所有缓冲的 function_call，发射剩余工具调用（流结束时调用）。参数解析同样经 `parseToolCallArguments` 容错处理，解析失败且 `throwOnInvalid` 时抛错（错误日志含 idx/name/snippet）。
 
 #### `async *createMessage(model, systemPrompt, messages, baseUrl, apiKey, signal?): AsyncGenerator<{ type: "text"; text: string }>`
 非流式消息生成器（Responses 模式，用于 Git 提交生成）。发送 POST /responses 后解析 `output_text` 并 yield。reasoning 禁用时传 `{ effort: "none" }`。

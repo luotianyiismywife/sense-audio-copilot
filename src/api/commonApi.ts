@@ -9,7 +9,7 @@ import {
     CancellationToken,
 } from "vscode";
 import { SenseAudioModelItem } from "../core/types";
-import { tryParseJSONObject, isImageMimeType, isToolResultPart, storeDataUriImages } from "../core/utils";
+import { tryParseJSONObject, isImageMimeType, isToolResultPart, storeDataUriImages, parseToolCallArguments } from "../core/utils";
 import { VersionManager } from "../core/versionManager";
 import type { InterceptedToolCall, StoredImage } from "../vision/types";
 import { ASK_IMAGE_TOOL_NAME, ASK_WITH_MULTI_IMAGE_TOOL_NAME } from "../vision/types";
@@ -26,14 +26,17 @@ export interface StreamUsage {
 }
 
 export abstract class CommonApi<TMessage, TRequestBody> {
-    /** Buffer for assembling streamed tool calls by index. */
-    protected _toolCallBuffers: Map<number, { id?: string; name?: string; args: string }> = new Map<
-        number,
+    /** Buffer for assembling streamed tool calls by key (id / index / auto). */
+    protected _toolCallBuffers: Map<string, { id?: string; name?: string; args: string }> = new Map<
+        string,
         { id?: string; name?: string; args: string }
     >();
 
-    /** Indices for which a tool call has been fully emitted. */
-    protected _completedToolCallIndices = new Set<number>();
+    /** Keys for which a tool call has been fully emitted. */
+    protected _completedToolCallIndices = new Set<string>();
+
+    /** Key of the most recently buffered tool call (fallback for chunks without id/index). */
+    protected _lastToolCallKey: string | undefined;
 
     /** Track if we emitted any assistant text before seeing tool calls (SSE-like begin-tool-calls hint). */
     protected _hasEmittedAssistantText = false;
@@ -182,11 +185,19 @@ export abstract class CommonApi<TMessage, TRequestBody> {
 
     /**
      * Try to emit a buffered tool call when a valid name and JSON arguments are available.
+     *
+     * **已废弃调用点**：`openaiApi.processDelta` 不再在每个 delta 后调用本方法——
+     * 流式参数的**严格前缀**本身可能是合法 JSON（如 `{"path":"a.ts"}` 是
+     * `{"path":"a.ts","startLine":1}` 的前缀），提前发射会**永久丢失后续参数**
+     * （index 加入 `_completedToolCallIndices` 后所有后续 chunk 被跳过）。
+     * 发射统一延迟到 `finish_reason` 时的 `flushToolCallBuffers`（与 Responses
+     * 路径的 `function_call_arguments.done` 语义一致）。保留本方法供 flush 使用。
+     *
      * @param index The tool call index from the stream.
      * @param progress Progress reporter for parts.
      */
     protected async tryEmitBufferedToolCall(
-        index: number,
+        index: string,
         progress: Progress<LanguageModelResponsePart>
     ): Promise<void> {
         const buf = this._toolCallBuffers.get(index);
@@ -227,13 +238,12 @@ export abstract class CommonApi<TMessage, TRequestBody> {
         for (const [idx, buf] of Array.from(this._toolCallBuffers.entries())) {
             // Intercept ask_image / ask_with_multi_image — store on instance for provider to handle
             if (buf.name === ASK_IMAGE_TOOL_NAME || buf.name === ASK_WITH_MULTI_IMAGE_TOOL_NAME) {
-                const argsText = buf.args.trim() || "{}";
-                const parsed = tryParseJSONObject(argsText);
-                if (parsed.ok) {
+                const parsed = parseToolCallArguments(buf.args);
+                if (parsed) {
                     this.interceptedToolCall = {
                         id: buf.id ?? `call_${Math.random().toString(36).slice(2, 10)}`,
                         name: buf.name,
-                        args: parsed.value as { imageIndex?: number; imageIndices?: number[]; query: string },
+                        args: parsed as { imageIndex?: number; imageIndices?: number[]; query: string },
                     };
                 }
                 this._toolCallBuffers.delete(idx);
@@ -241,12 +251,12 @@ export abstract class CommonApi<TMessage, TRequestBody> {
                 continue;
             }
 
-            const argsText = buf.args.trim() || "{}";
-            const parsed = tryParseJSONObject(argsText);
-            if (!parsed.ok) {
+            const parsed = parseToolCallArguments(buf.args);
+            if (!parsed) {
                 if (throwOnInvalid) {
                     console.error("[SenseAudio] Invalid JSON for tool call", {
                         idx,
+                        name: buf.name,
                         snippet: (buf.args || "").slice(0, 200),
                     });
                     throw new Error("Invalid JSON for tool call");
@@ -255,7 +265,7 @@ export abstract class CommonApi<TMessage, TRequestBody> {
             }
             const id = buf.id ?? `call_${Math.random().toString(36).slice(2, 10)}`;
             const name = buf.name ?? "unknown_tool";
-            let parameters = parsed.value;
+            let parameters = parsed;
             parameters = this.adjustReadFileParameters(name, parameters);
             progress.report(new LanguageModelToolCallPart(id, name, parameters));
             this._toolCallBuffers.delete(idx);

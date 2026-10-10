@@ -281,8 +281,8 @@ check("formatBillingModeLine 区分三种模式", () => {
     assert.equal(formatBillingModeLine(null), "");
 });
 
-check("formatBalanceSummary 含赠送", () => {
-    assert.equal(formatBalanceSummary(sampleSnapshot), "¥0.00 + 赠送 ¥358.78");
+check("formatBalanceSummary 合计余额（2026-10-10 改版：不再分开显示赠送）", () => {
+    assert.equal(formatBalanceSummary(sampleSnapshot), "¥358.78");
     const cashOnly = { ...sampleSnapshot, balance: { cashCny: 12.34, voucherCny: 0, totalCny: 12.34, earliestVoucherExpiry: null } };
     assert.equal(formatBalanceSummary(cashOnly), "¥12.34");
     assert.equal(formatBalanceSummary(null), "");

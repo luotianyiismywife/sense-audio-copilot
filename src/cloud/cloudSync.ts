@@ -175,19 +175,22 @@ export async function pushToCloud(context: vscode.ExtensionContext, silent = fal
         }
         return;
     }
-    const lockUntil = context.globalState.get<number>(GLOBAL_STATE_LOCK_UNTIL, 0) ?? 0;
-    if (Date.now() < lockUntil) {
-        logger.info("cloudSync.push.locked", { lockUntil, silent });
-        return;
-    }
-
-    const session = await getGitHubSession(!silent);
-    if (!session) {
-        return;
-    }
-
+    // 立即置互斥标志（在任何 await 之前）——否则两个并发调用都能通过上面的检查
+    // （getGitHubSession 可能弹账号选择器，耗时数百 ms），各自 await 后都置标志
+    // 并发运行，破坏 last-writer-wins 防护。
     syncInFlight = true;
     try {
+        const lockUntil = context.globalState.get<number>(GLOBAL_STATE_LOCK_UNTIL, 0) ?? 0;
+        if (Date.now() < lockUntil) {
+            logger.info("cloudSync.push.locked", { lockUntil, silent });
+            return;
+        }
+
+        const session = await getGitHubSession(!silent);
+        if (!session) {
+            return;
+        }
+
         await pushToCloudInner(context, session, silent);
     } finally {
         syncInFlight = false;
@@ -322,17 +325,17 @@ export async function pullFromCloud(context: vscode.ExtensionContext, silent = f
         }
         return false;
     }
-
-    const session = await getGitHubSession(false);
-    if (!session) {
-        if (!silent) {
-            vscode.window.showWarningMessage(l10n("GitHub sign-in required for cloud sync"));
-        }
-        return false;
-    }
-
+    // 立即置互斥标志（在任何 await 之前）——与 pushToCloud 相同的竞态防护。
     syncInFlight = true;
     try {
+        const session = await getGitHubSession(false);
+        if (!session) {
+            if (!silent) {
+                vscode.window.showWarningMessage(l10n("GitHub sign-in required for cloud sync"));
+            }
+            return false;
+        }
+
         return await pullFromCloudInner(context, session, silent);
     } finally {
         syncInFlight = false;

@@ -296,3 +296,122 @@ export function tryParseJSONObject(
         return { ok: false };
     }
 }
+
+/**
+ * Normalize a streamed tool-call arguments string and parse it tolerantly.
+ *
+ * Handles common model-side quirks before falling back to a repair pass:
+ * 1. Trim whitespace.
+ * 2. Strip markdown code fences (```json ... ```).
+ * 3. Strip leading/trailing non-JSON prose (text before first `{` / after last `}`).
+ * 4. Empty/undefined → `{}`.
+ * 5. Repair common JSON defects: trailing commas, smart quotes, single-quoted
+ *    strings, unclosed braces/brackets (stream truncation).
+ *
+ * Returns the parsed object, or undefined when unparseable.
+ *
+ * ⚠️ 平台兼容层坑点（2026-10-10 实测，移植到其他平台时保留此防御层）：
+ * GLM 走 OpenAI 兼容接口时 arguments 字符串不干净——围栏包裹、前后杂质、
+ * 尾逗号、中文智能引号、单引号、流截断（finish_reason=length）均实测出现过。
+ * 解析失败直接 throw 会终止整个请求（用户看到 "Sorry, your request failed"），
+ * 容错解析 + 失败时日志带 idx/name/snippet 才是正确姿势。三协议共用本函数。
+ *
+ * **为什么更兼容且对标准协议零损害（2026-10-10 实测验证）**：
+ * 所有容错都是"严格解析失败后才走"的兜底——干净 JSON 在第 5 步之前就被
+ * `tryParseJSONObject` 直接解析成功，修复路径（repairJsonText）根本不触发，
+ * 标准输入的解析结果与不做任何容错时完全一致。不存在"为了兼容坏的而牺牲
+ * 好的"：它只是把"坏输入直接终止整个长流式请求"变成"能救则救、救不回再
+ * 报错"。实测背景：报错全部集中在 GLM 超长上下文（messageCount=1624）+
+ * 146~149 秒长流式输出场景，同样的请求换 DeepSeek 成功、GLM 小上下文也
+ * 全部成功——即 GLM 仅在长流尾部偶发把 JSON 写一半（流截断），本函数的
+ * 未闭合括号补全正是覆盖该场景。8 个模型 × 2/4 路并行 × 开/关思考各 3 次
+ * 探测中所有模型的标准输出均干净，证明此防御对标准上游零影响。
+ */
+export function parseToolCallArguments(raw: string | undefined): Record<string, unknown> | undefined {
+    let text = (raw ?? "").trim();
+    if (!text) {
+        return {};
+    }
+
+    // Strip markdown code fences.
+    const fence = text.match(/^```[a-zA-Z]*\s*([\s\S]*?)\s*```$/);
+    if (fence) {
+        text = fence[1].trim();
+    }
+
+    // Strip prose before the first `{` / after the last `}`.
+    const first = text.indexOf("{");
+    const last = text.lastIndexOf("}");
+    if (first > 0 || (last !== -1 && last < text.length - 1)) {
+        if (first !== -1 && last > first) {
+            text = text.slice(first, last + 1);
+        }
+    }
+
+    const direct = tryParseJSONObject(text);
+    if (direct.ok) {
+        return direct.value;
+    }
+
+    // Repair pass: fix common defects then retry.
+    const repaired = repairJsonText(text);
+    if (repaired !== text) {
+        const retry = tryParseJSONObject(repaired);
+        if (retry.ok) {
+            return retry.value;
+        }
+    }
+    return undefined;
+}
+
+/**
+ * Best-effort repair of common JSON defects in streamed tool-call arguments.
+ * Only used as a fallback when strict parsing fails.
+ */
+function repairJsonText(text: string): string {
+    let out = text;
+    // Smart quotes → straight quotes.
+    out = out.replace(/[\u201c\u201d]/g, '"').replace(/[\u2018\u2019]/g, "'");
+    // Trailing commas before } or ].
+    out = out.replace(/,\s*([}\]])/g, "$1");
+    // Single-quoted keys/values → double quotes (only when no double quotes present in the segment).
+    if (!out.includes('"')) {
+        out = out.replace(/'([^'\\]*)'/g, '"$1"');
+    }
+    // Balance unclosed braces/brackets (stream truncation mid-JSON).
+    const stack: string[] = [];
+    let inString = false;
+    let escaped = false;
+    for (const ch of out) {
+        if (escaped) {
+            escaped = false;
+            continue;
+        }
+        if (ch === "\\") {
+            escaped = true;
+            continue;
+        }
+        if (ch === '"') {
+            inString = !inString;
+            continue;
+        }
+        if (inString) {
+            continue;
+        }
+        if (ch === "{" || ch === "[") {
+            stack.push(ch);
+        } else if (ch === "}" || ch === "]") {
+            stack.pop();
+        }
+    }
+    if (inString) {
+        out += '"';
+    }
+    // Drop a dangling trailing fragment like `, "key":` or `, "key"` at the end.
+    out = out.replace(/,\s*"[^"]*"?\s*:?\s*$/, "");
+    out = out.replace(/,\s*$/, "");
+    while (stack.length > 0) {
+        out += stack.pop() === "{" ? "}" : "]";
+    }
+    return out;
+}

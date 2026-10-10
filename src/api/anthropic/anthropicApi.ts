@@ -222,11 +222,18 @@ export class AnthropicApi extends CommonApi<AnthropicMessage, AnthropicRequestBo
 				}
 			}
 
-			// Add thinking content for assistant messages
-			if (role === "assistant" && modelConfig.includeReasoningInRequest) {
-				contentBlocks.push({
+			// Add thinking content for assistant messages.
+			// Anthropic protocol: thinking blocks must be the FIRST content block
+			// of an assistant message. Skip entirely when there is no real
+			// reasoning content — a fabricated placeholder ("Next step.") without
+			// a signature is rejected by signature-validating endpoints (400
+			// "Invalid signature"), and VS Code does not re-send
+			// LanguageModelThinkingPart in history so joinedThinking is normally
+			// empty on later turns.
+			if (role === "assistant" && modelConfig.includeReasoningInRequest && joinedThinking) {
+				contentBlocks.unshift({
 					type: "thinking",
-					thinking: joinedThinking || "Next step.",
+					thinking: joinedThinking,
 				});
 			}
 
@@ -449,7 +456,7 @@ export class AnthropicApi extends CommonApi<AnthropicMessage, AnthropicRequestBo
 					progress.report(new vscode.LanguageModelTextPart(" "));
 					this._emittedBeginToolCallsHint = true;
 				}
-				const idx = (chunk.index as number) ?? 0;
+				const idx = String((chunk.index as number) ?? 0);
 				this._toolCallBuffers.set(idx, {
 					id: chunk.content_block.id,
 					name: chunk.content_block.name,
@@ -465,7 +472,7 @@ export class AnthropicApi extends CommonApi<AnthropicMessage, AnthropicRequestBo
 			} else if (chunk.delta.type === "thinking_delta" && chunk.delta.thinking) {
 				this.bufferThinkingContent(chunk.delta.thinking, progress);
 			} else if (chunk.delta.type === "input_json_delta" && chunk.delta.partial_json) {
-				const idx = (chunk.index as number) ?? 0;
+				const idx = String((chunk.index as number) ?? 0);
 				const buf = this._toolCallBuffers.get(idx);
 				if (buf) {
 					buf.args += chunk.delta.partial_json;

@@ -17,6 +17,7 @@ import {
     mapRole,
     replaceDataUriImages,
     tryParseJSONObject,
+    parseToolCallArguments,
 } from "../../core/utils";
 import { CommonApi, StreamUsage } from "../commonApi";
 import { logger } from "../../core/logger";
@@ -477,13 +478,12 @@ export class ResponsesApi extends CommonApi<ResponsesInputItem, Record<string, u
 
         // Intercept vision proxy tools
         if (buf.name === ASK_IMAGE_TOOL_NAME || buf.name === ASK_WITH_MULTI_IMAGE_TOOL_NAME) {
-            const argsText = buf.args.trim() || "{}";
-            const parsed = tryParseJSONObject(argsText);
-            if (parsed.ok) {
+            const parsed = parseToolCallArguments(buf.args);
+            if (parsed) {
                 this.interceptedToolCall = {
                     id: buf.callId ?? buf.id ?? `call_${Math.random().toString(36).slice(2, 10)}`,
                     name: buf.name,
-                    args: parsed.value as { imageIndex?: number; imageIndices?: number[]; query: string },
+                    args: parsed as { imageIndex?: number; imageIndices?: number[]; query: string },
                 };
             }
             this._responsesToolCallBuffers.delete(outputIndex);
@@ -491,12 +491,12 @@ export class ResponsesApi extends CommonApi<ResponsesInputItem, Record<string, u
             return;
         }
 
-        const parsed = tryParseJSONObject(buf.args.trim() || "{}");
-        if (!parsed.ok) {
+        const parsed = parseToolCallArguments(buf.args);
+        if (!parsed) {
             return;
         }
         const id = buf.callId ?? buf.id ?? `call_${Math.random().toString(36).slice(2, 10)}`;
-        let parameters = parsed.value;
+        let parameters = parsed;
         parameters = this.adjustReadFileParameters(buf.name, parameters);
         progress.report(new LanguageModelToolCallPart(id, buf.name, parameters));
         this._responsesToolCallBuffers.delete(outputIndex);
@@ -519,28 +519,33 @@ export class ResponsesApi extends CommonApi<ResponsesInputItem, Record<string, u
             }
             // Intercept vision proxy tools
             if (buf.name === ASK_IMAGE_TOOL_NAME || buf.name === ASK_WITH_MULTI_IMAGE_TOOL_NAME) {
-                const parsed = tryParseJSONObject(buf.args.trim() || "{}");
-                if (parsed.ok) {
+                const parsed = parseToolCallArguments(buf.args);
+                if (parsed) {
                     this.interceptedToolCall = {
                         id: buf.callId ?? buf.id ?? `call_${Math.random().toString(36).slice(2, 10)}`,
                         name: buf.name,
-                        args: parsed.value as { imageIndex?: number; imageIndices?: number[]; query: string },
+                        args: parsed as { imageIndex?: number; imageIndices?: number[]; query: string },
                     };
                 }
                 this._responsesToolCallBuffers.delete(idx);
                 this._completedResponsesToolCalls.add(idx);
                 continue;
             }
-            const parsed = tryParseJSONObject(buf.args.trim() || "{}");
-            if (!parsed.ok) {
+            const parsed = parseToolCallArguments(buf.args);
+            if (!parsed) {
                 if (throwOnInvalid) {
+                    console.error("[SenseAudio] Invalid JSON for tool call", {
+                        idx,
+                        name: buf.name,
+                        snippet: (buf.args || "").slice(0, 200),
+                    });
                     throw new Error("Invalid JSON for tool call");
                 }
                 continue;
             }
             const id = buf.callId ?? buf.id ?? `call_${Math.random().toString(36).slice(2, 10)}`;
             const name = buf.name ?? "unknown_tool";
-            let parameters = parsed.value;
+            let parameters = parsed;
             parameters = this.adjustReadFileParameters(name, parameters);
             progress.report(new LanguageModelToolCallPart(id, name, parameters));
             this._responsesToolCallBuffers.delete(idx);

@@ -126,7 +126,10 @@ try {
             role: "user",
             content: [{ type: "tool_result", tool_use_id: entry.id, content: entry.result }],
         },
-        { role: "assistant", content: [{ type: "text", text: "The previous answer." }, { type: "thinking", thinking: "Next step." }] },
+        // No fabricated thinking placeholder: without real reasoning content the
+        // thinking block is skipped entirely (a placeholder without a signature
+        // is rejected by signature-validating endpoints).
+        { role: "assistant", content: [{ type: "text", text: "The previous answer." }] },
     ]);
 
     // A tool-call assistant message WITHOUT any reasoning parts must still carry

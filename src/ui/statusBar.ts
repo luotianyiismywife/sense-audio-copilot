@@ -27,7 +27,6 @@ let cumulativeCacheMissTokens = 0;
 const STATUS_BAR_HIDE_DELAY_MS = 60 * 1000; // 1 minute of inactivity
 /** Module-level timer for auto-hiding the status bar when SenseAudio models are no longer in use. */
 let statusBarHideTimer: NodeJS.Timeout | null = null;
-
 /**
  * Last rendered token-count text. Kept so the main text can be restored
  * immediately when `showUsageInStatusBar` is toggled off at runtime
@@ -153,11 +152,14 @@ export async function refreshPlanUsageNow(): Promise<PlanUsageSnapshot | null> {
 /**
  * Render the status bar main text.
  *
- * Layout (mirrors upstream `Go 5H 65%`):
- * - plan quota available → `$(pulse) 5H 65%` (5-hour rate-limit window)
- * - plan quota exhausted → `$(pulse) 余额 ¥12.34` (billing from balance)
+ * Layout (2026-10-10 改版):
+ * - 套餐额度内（billingMode=plan）→ `$(pulse) 65% 30% 12%`（5h/周/月三窗口百分比，空格分隔）
+ * - 用余额（billingMode=extra/free，月度额度耗尽）→ `$(pulse) ¥12.34`（现金+代金券合计）
  * - no data yet → `$(pulse) --`
  * - plan usage disabled → restore the token-count text (legacy behaviour)
+ *
+ * 区分依据：`isPlanExhausted`（只看月度额度窗口）——月度额度耗尽即进入
+ * 超额计费（代金券→现金），此时显示余额；额度内显示三窗口百分比。
  */
 function updateStatusBarUsageText(statusBarItem: vscode.StatusBarItem): void {
     if (!isUsageInStatusBarEnabled()) {
@@ -168,32 +170,36 @@ function updateStatusBarUsageText(statusBarItem: vscode.StatusBarItem): void {
         return;
     }
     const snapshot = getPlanUsageSnapshot();
-    const primary = getPrimaryWindow(snapshot);
-    if (!snapshot || !primary) {
+    if (!snapshot) {
         statusBarItem.text = `$(pulse) --`;
         return;
     }
     if (isPlanExhausted(snapshot)) {
-        statusBarItem.text = `$(pulse) ${l10n("Balance")} ${formatBalanceSummary(snapshot)}`;
+        // 用余额：月度套餐额度耗尽，超出部分按量计费（代金券→现金）
+        statusBarItem.text = `$(pulse) ${formatBalanceSummary(snapshot)}`;
         return;
     }
-    statusBarItem.text = `$(pulse) ${l10n("5H")} ${getWindowPercent(primary)}%`;
+    // 套餐额度内：显示 5h/周/月三窗口百分比，空格分隔
+    const percents = snapshot.rateLimitWindows.map((w) => `${getWindowPercent(w)}%`);
+    if (percents.length === 0) {
+        statusBarItem.text = `$(pulse) --`;
+        return;
+    }
+    statusBarItem.text = `$(pulse) ${percents.join(" ")}`;
 }
 
 /**
  * Append the plan-usage section to the tooltip lines.
  *
- * Layout:
+ * Layout (2026-10-10 改版：仅套餐用量 + 余额，累计 Token 部分已移除——
+ * VS Code 原生会话 Token 指示器已覆盖该信息):
  * ```
- * ↑ 12.3K (1.2K cached, 65%)
- * ↓ 4.5K
- *
  * 5H——65% (6,500 / 10,000 积分)
  * Week——30% (3,000 / 10,000 积分)
  * Month——12% (1,200 / 10,000 积分)
  * 五小时窗口将在 2H13M 后重置
  *
- * 余额——¥0.00 + 赠送 ¥358.78
+ * 余额——¥358.78
  * 套餐额度内（5h / 周窗口耗尽仅限流，等待下一周期恢复，不扣余额）
  * ```
  */
@@ -206,7 +212,6 @@ function appendPlanUsageTooltipLines(lines: string[]): void {
         return;
     }
     if (snapshot.windows.length > 0) {
-        lines.push("");
         for (const window of snapshot.windows) {
             lines.push(formatWindowLine(window));
         }
@@ -272,8 +277,8 @@ export function initStatusBar(
         })
     );
 
-    // Do NOT show on startup — only show while one of this extension's models is actually in use.
-    tokenCountStatusBarItem.hide();
+    // 常态化显示（2026-10-10 改版）：不再静默隐藏，启动即显示并保持常显。
+    tokenCountStatusBarItem.show();
     return tokenCountStatusBarItem;
 }
 
@@ -318,18 +323,15 @@ export function showTokenStatusBar(statusBarItem: vscode.StatusBarItem): void {
 
 /**
  * Schedule hiding the status bar after a period of inactivity.
- * Called when a chat request finishes; the bar stays visible while the user
- * keeps using SenseAudio models and auto-hides once they stop (e.g. switched
- * to another model provider).
+ * 2026-10-10 改版：状态栏常态化显示，不再自动隐藏——本函数保留为空操作
+ * 以兼容既有调用点（provider.ts 的 finally），后续可移除。
  */
 export function scheduleStatusBarHide(statusBarItem: vscode.StatusBarItem, delayMs: number = STATUS_BAR_HIDE_DELAY_MS): void {
     if (statusBarHideTimer) {
         clearTimeout(statusBarHideTimer);
-    }
-    statusBarHideTimer = setTimeout(() => {
         statusBarHideTimer = null;
-        statusBarItem.hide();
-    }, delayMs);
+    }
+    // No-op: the status bar is now always visible (常态化显示).
 }
 
 /**
@@ -453,32 +455,17 @@ export function recordUsage(usage: StreamUsage): void {
 }
 
 /**
- * Update the status bar tooltip with cumulative input/output token counts,
- * DeepSeek cache info (if available) and the SenseAudio plan usage section
+ * Update the status bar tooltip with the SenseAudio plan usage section
  * (if enabled and data is cached).
+ *
+ * 2026-10-10 改版：累计 Token 部分（↑/↓ 箭头行）已移除——VS Code 原生
+ * 会话 Token 指示器已覆盖该信息，tooltip 仅保留套餐用量 + 余额。
  */
 export function updateCumulativeTooltip(statusBarItem: vscode.StatusBarItem): void {
-    const arrowUp = "\u2191";
-    const arrowDown = "\u2193";
     const lines: string[] = [];
 
-    // Line 1: cumulative input + cache info
-    let inputLine = `${arrowUp} ${formatTokenCount(cumulativeInputTokens)}`;
-    if (cumulativeCacheHitTokens > 0 || cumulativeCacheMissTokens > 0) {
-        const totalCache = cumulativeCacheHitTokens + cumulativeCacheMissTokens;
-        const cachePercent = totalCache > 0
-            ? Math.round((cumulativeCacheHitTokens / totalCache) * 100)
-            : 0;
-        const cacheFormatted = formatTokenCount(cumulativeCacheHitTokens);
-        inputLine += ` ${l10nFormat("({0} cached, {1}%)", cacheFormatted, cachePercent)}`;
-    }
-    lines.push(inputLine);
-
-    // Line 2: cumulative output
-    lines.push(`${arrowDown} ${formatTokenCount(cumulativeOutputTokens)}`);
-
-    // Section 3: SenseAudio plan usage + balance (optional)
+    // SenseAudio plan usage + balance (optional)
     appendPlanUsageTooltipLines(lines);
 
-    statusBarItem.tooltip = lines.join("\n");
+    statusBarItem.tooltip = lines.length > 0 ? lines.join("\n") : l10n("Plan usage and token usage");
 }
