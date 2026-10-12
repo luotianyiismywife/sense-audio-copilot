@@ -339,7 +339,7 @@ provideLanguageModelChatResponse(model, messages, options, progress, token)
     └── function.arguments: JSON 参数 (可能分片)
 
 处理机制:
-  1. _toolCallBuffers Map<key, {id, name, args}>（key 优先用工具调用 id，其次 index，再次上一个 key，最后自增序号——部分 OpenAI 兼容端点（如 GLM）并行工具调用不给 index 或全给 0，默认 0 会把不同调用的参数片段拼进同一缓冲导致 JSON 损坏）
+  1. _toolCallBuffers Map<key, {id, name, args}>（key 优先用工具调用 id，其次经 `_indexToId` 把仅带 index 的 args 碎片解析回同 tool_call 的 id 桶，再次上一个 key，最后自增序号——SenseAudio 流式并行 tool_calls 的 args 碎片丢 `id` 仅带 index（不符合 OpenAI 标准），若不把 index 关联回 id 会把 name（id 桶）与 args（index 桶）分裂导致 `"Invalid JSON for tool call"`）
   2. stream 分片拼接 args
   3. tryEmitBufferedToolCall() → 参数可解析 JSON 时立即发射
   4. flushToolCallBuffers() → finish_reason 时强制发射剩余
@@ -1038,6 +1038,7 @@ API 实现的抽象基类。
 | `_toolCallBuffers` | `Map<string, {id?, name?, args}>` | 工具调用参数缓冲区（key 优先 id / 其次 index / 再次上一个 key / 最后自增序号） |
 | `_lastToolCallKey` | `string \| undefined` | 最近一次缓冲的工具调用 key（无 id/index 的 chunk 兑底归属） |
 | `_completedToolCallIndices` | `Set<number>` | 已完成发射的工具调用索引 |
+| `_indexToId` | `Map<string, string>` | 流式 `index` → tool_call `id` 映射（SenseAudio 的 B 类 args 碎片丢 `id`，仅带 index；记录映射使碎片解析回同 tool_call 的 id 桶，避免 name/args 分裂） |
 | `_hasEmittedAssistantText` | `boolean` | 是否已发射过助手文本 |
 | `_emittedBeginToolCallsHint` | `boolean` | 是否已发射工具调用前导空格 |
 | `_lastFinishReason` | `string \| undefined` | 最近一次流的结束原因（`length`/`max_tokens`/`stop`/`tool_calls` 等），供 `checkZeroAnswerBudgetExhausted` 零正文预算耗尽检测使用；经 `lastFinishReason` 公共 getter 暴露 |
@@ -1065,7 +1066,7 @@ API 实现的抽象基类。
 当工具调用的名称和 JSON 参数都可用时，尝试发射缓冲的工具调用。跳过 `ask_image` 和 `ask_with_multi_image` 工具（由 provider 处理）。
 
 #### `protected flushToolCallBuffers(progress, throwOnInvalid): Promise<void>`
-清空所有工具调用缓冲区，发射剩余的工具调用。拦截 `ask_image` 和 `ask_with_multi_image` 存入 `interceptedToolCall`。参数解析经 `parseToolCallArguments` 容错处理（剥围栏/去杂质/修复式解析），解析失败且 `throwOnInvalid` 时抛错（错误日志含 idx/name/前 200 字符 snippet）。
+清空所有工具调用缓冲区，发射剩余的工具调用。拦截 `ask_image` 和 `ask_with_multi_image` 存入 `interceptedToolCall`。参数解析经 `parseToolCallArguments` 容错处理（剥围栏/去杂质/修复式解析），解析失败时先尝试 `splitToolCallArguments` 拆解（并行调用撞桶合并的 `{...}{...}` 串，能拆出多个完整 JSON 则逐个发射，不再整请求失败），拆不出且 `throwOnInvalid` 时才抛错（错误日志含 idx/name/前 200 字符 snippet）。
 
 #### `public getStoredImage(imageIndex): StoredImage | undefined`
 从实例的 `_localImages` 数组中按索引获取存储的图片数据。
@@ -1274,6 +1275,9 @@ API 实现的抽象基类。
 
 #### `parseToolCallArguments(raw): Record<string, unknown> | undefined`（2026-10-10 新增）
 容错解析流式工具调用参数字符串（GLM 等兼容端点偶发参数不干净）。处理顺序：① trim；② 剥 markdown 代码围栏（```json ... ```）；③ 剥首尾非 JSON 杂质（首个 `{` 前 / 末个 `}` 后的文字）；④ 空串/undefined 兑底 `{}`；⑤ 严格解析失败后走修复式解析 `repairJsonText`（智能引号→直引号、尾逗号、单引号字符串、未闭合括号/引号补全——流截断场景），修复后重试。全部失败返回 undefined（调用方决定抛错或跳过）。三协议工具调用解析共用（`commonApi.flushToolCallBuffers` / `responsesApi`）。
+
+#### `splitToolCallArguments(raw): Record<string, unknown>[]`（2026-10-12 新增）
+拆分拼接的顶层 JSON 对象序列（如 `{"tool":"a"}{"tool":"b"}` → 两个对象）。兜底用于流式工具调用参数异常时（如 `index→id` 映射未能归并、`finish_reason=length` 流截断等）的拆解。按顶层花括号深度切分，跳过含未闭合引号的片段，逐段经 `parseToolCallArguments` 解析，保留完整对象。配合 `flushToolCallBuffers` 的拆解降级，避免参数解析失败时抛 `"Invalid JSON for tool call"` 使整请求失败。
 
 ---
 

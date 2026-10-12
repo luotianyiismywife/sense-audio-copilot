@@ -365,6 +365,70 @@ export function parseToolCallArguments(raw: string | undefined): Record<string, 
 }
 
 /**
+ * Split a concatenated sequence of top-level JSON objects, e.g.
+ * `{"tool":"a"}{"tool":"b"}` → [`{"tool":"a"}`, `{"tool":"b"}`].
+ *
+ * Used as a fallback when parallel tool calls share the same stream `index`
+ * and their argument fragments got merged into a single buffer (the collision
+ * guard in `processDelta` tries to prevent). Keeps only fragments that parse
+ * as complete JSON objects; drops the rest.
+ *
+ * Returns an empty array when nothing splits off cleanly.
+ */
+export function splitToolCallArguments(raw: string): Record<string, unknown>[] {
+    let text = raw.trim();
+    if (!text) {
+        return [];
+    }
+    // Strip markdown code fences first.
+    const fence = text.match(/^```[a-zA-Z]*\s*([\s\S]*?)\s*```$/);
+    if (fence) {
+        text = fence[1].trim();
+    }
+
+    const results: Record<string, unknown>[] = [];
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    let start = -1;
+    for (let i = 0; i < text.length; i++) {
+        const ch = text[i];
+        if (escaped) {
+            escaped = false;
+            continue;
+        }
+        if (ch === "\\") {
+            escaped = true;
+            continue;
+        }
+        if (ch === '"') {
+            inString = !inString;
+            continue;
+        }
+        if (inString) {
+            continue;
+        }
+        if (ch === "{") {
+            if (depth === 0) {
+                start = i;
+            }
+            depth++;
+        } else if (ch === "}") {
+            depth--;
+            if (depth === 0 && start !== -1) {
+                const frag = text.slice(start, i + 1).trim();
+                const parsed = parseToolCallArguments(frag);
+                if (parsed) {
+                    results.push(parsed);
+                }
+                start = -1;
+            }
+        }
+    }
+    return results;
+}
+
+/**
  * Best-effort repair of common JSON defects in streamed tool-call arguments.
  * Only used as a fallback when strict parsing fails.
  */

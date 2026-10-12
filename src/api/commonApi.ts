@@ -9,7 +9,7 @@ import {
     CancellationToken,
 } from "vscode";
 import { SenseAudioModelItem } from "../core/types";
-import { tryParseJSONObject, isImageMimeType, isToolResultPart, storeDataUriImages, parseToolCallArguments } from "../core/utils";
+import { tryParseJSONObject, isImageMimeType, isToolResultPart, storeDataUriImages, parseToolCallArguments, splitToolCallArguments } from "../core/utils";
 import { VersionManager } from "../core/versionManager";
 import type { InterceptedToolCall, StoredImage } from "../vision/types";
 import { ASK_IMAGE_TOOL_NAME, ASK_WITH_MULTI_IMAGE_TOOL_NAME } from "../vision/types";
@@ -37,6 +37,14 @@ export abstract class CommonApi<TMessage, TRequestBody> {
 
     /** Key of the most recently buffered tool call (fallback for chunks without id/index). */
     protected _lastToolCallKey: string | undefined;
+
+        /** Maps stream `index` → tool-call `id` seen in the same call. OpenAI-compatible
+         *  endpoints emit each tool call's first chunk with `{index, id, name}` and later
+         *  argument fragments with only `{index, arguments}` (no id). Without this map, the
+         *  id-carrying chunk goes to the id bucket while argument fragments go to a separate
+         *  index bucket, so neither bucket ever has both name and args. Resolving index → id
+         *  keeps every fragment of one parallel call in the same bucket. */
+        protected _indexToId = new Map<string, string>();
 
     /** Track if we emitted any assistant text before seeing tool calls (SSE-like begin-tool-calls hint). */
     protected _hasEmittedAssistantText = false;
@@ -253,6 +261,28 @@ export abstract class CommonApi<TMessage, TRequestBody> {
 
             const parsed = parseToolCallArguments(buf.args);
             if (!parsed) {
+                // Fallback: the buffer may hold fragments of several parallel tool
+                // calls merged together (collision guard failed to separate them).
+                // Split into individual JSON objects and emit each one separately
+                // instead of throwing away the whole request.
+                const split = splitToolCallArguments(buf.args);
+                if (split.length > 1) {
+                    const baseName = buf.name ?? "unknown_tool";
+                    for (let i = 0; i < split.length; i++) {
+                        let p = split[i];
+                        p = this.adjustReadFileParameters(baseName, p);
+                        progress.report(
+                            new LanguageModelToolCallPart(
+                                `call_${Math.random().toString(36).slice(2, 10)}`,
+                                baseName,
+                                p
+                            )
+                        );
+                    }
+                    this._toolCallBuffers.delete(idx);
+                    this._completedToolCallIndices.add(idx);
+                    continue;
+                }
                 if (throwOnInvalid) {
                     console.error("[SenseAudio] Invalid JSON for tool call", {
                         idx,
@@ -307,6 +337,7 @@ export abstract class CommonApi<TMessage, TRequestBody> {
     protected _resetStreamState(): void {
         this._toolCallBuffers.clear();
         this._completedToolCallIndices.clear();
+        this._indexToId.clear();
         this._hasEmittedAssistantText = false;
         this._lastFinishReason = undefined;
         this._emittedBeginToolCallsHint = false;

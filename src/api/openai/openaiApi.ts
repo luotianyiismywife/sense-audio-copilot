@@ -503,15 +503,41 @@ export class OpenaiApi extends CommonApi<OpenAIChatMessage, Record<string, unkno
                 // 超长上下文（1624 条消息）+ 146 秒长流式输出场景。
                 const tcId = typeof tc.id === "string" && tc.id ? tc.id : undefined;
                 const tcIndex = typeof tc.index === "number" ? String(tc.index) : undefined;
-                let idx: string;
+                const func = tc.function as Record<string, unknown> | undefined;
+                const tcName = typeof func?.name === "string" && func.name ? (func.name as string) : undefined;
+                // Candidate buffer key; the first id/index that is free (or, when it is a
+                // name-bearing chunk, does not already hold a different tool call) wins.
+                // Otherwise fall through to a fresh auto key so that parallel calls sharing
+                // the same (or omitted) `index` never merge their argument fragments into
+                // one corrupted buffer.
+                // Resolve buffer key. The canonical key is the tool-call `id`. When a
+                // chunk carries both id and index, record `index -> id` so that later
+                // argument-only chunks (which carry only `index`, no id) resolve back to
+                // the SAME bucket instead of opening a separate index bucket. This fixes
+                // SenseAudio's streaming tool_calls, whose argument fragments drop `id`
+                // (non-standard vs OpenAI), which otherwise split name (id bucket) and
+                // args (index bucket) apart and yield "Invalid JSON for tool call".
+                let idx: string | undefined;
                 if (tcId) {
                     idx = tcId;
+                    if (tcIndex) {
+                        this._indexToId.set(tcIndex, tcId);
+                    }
                 } else if (tcIndex) {
-                    idx = tcIndex;
+                    const mappedId = this._indexToId.get(tcIndex);
+                    if (mappedId && !this._completedToolCallIndices.has(mappedId)) {
+                        idx = mappedId;
+                    } else {
+                        idx = tcIndex;
+                    }
                 } else if (this._lastToolCallKey) {
                     idx = this._lastToolCallKey;
                 } else {
-                    idx = `auto_${this._toolCallBuffers.size}`;
+                    let n = this._toolCallBuffers.size;
+                    while (this._toolCallBuffers.has(`auto_${n}`) || this._completedToolCallIndices.has(`auto_${n}`)) {
+                        n++;
+                    }
+                    idx = `auto_${n}`;
                 }
                 this._lastToolCallKey = idx;
                 if (this._completedToolCallIndices.has(idx)) {
@@ -521,9 +547,8 @@ export class OpenaiApi extends CommonApi<OpenAIChatMessage, Record<string, unkno
                 if (tcId) {
                     buf.id = tcId;
                 }
-                const func = tc.function as Record<string, unknown> | undefined;
-                if (func?.name && typeof func.name === "string") {
-                    buf.name = func.name as string;
+                if (tcName) {
+                    buf.name = tcName;
                 }
                 if (typeof func?.arguments === "string") {
                     buf.args += func.arguments as string;
