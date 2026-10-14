@@ -345,7 +345,7 @@ async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff
                 if (hasTransient) {
                     throw new Error(l10nFormat("All API keys are temporarily unavailable ({0}). Please retry later.", detail));
                 }
-                throw new Error(l10nFormat("All API keys are unavailable ({0}). Use the Manage API Keys command to check availability.", detail));
+                throw new Error(l10nFormat("All API keys are unavailable ({0}). Use the Manage API Keys command to check availability, or reset exhausted states to recover keys that may have been marked unavailable by mistake.", detail));
             }
 
             let entry = forceKey ?? (await pickNextApiKey(secrets, apiKeyMode));
@@ -393,7 +393,7 @@ async function performCommitMsgGeneration(secrets: vscode.SecretStorage, gitDiff
                         );
                     }
                     throw new Error(
-                        l10nFormat("All API keys are unavailable ({0}). Use the Manage API Keys command to check availability.", detail)
+                        l10nFormat("All API keys are unavailable ({0}). Use the Manage API Keys command to check availability, or reset exhausted states to recover keys that may have been marked unavailable by mistake.", detail)
                     );
                 }
             }

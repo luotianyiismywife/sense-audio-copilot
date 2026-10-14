@@ -569,6 +569,7 @@ test/                                     # 测试脚本（运行前需 npm run 
 ├── test-anthropic-vision-order.mjs       # Anthropic 视觉历史顺序测试（2 项断言，回归：先推视觉历史导致顺序颠倒）
 ├── test-image-dimensions.mjs             # 图片尺寸解析测试（5 项断言，回归：PNG 签名检测错误）
 ├── test-sse-stream.mjs                   # SSE 流消费测试（3 项断言，回归：无 [DONE] 时工具调用被丢弃）
+├── test-split-tool-call-args.mjs         # 工具调用参数拆分/分桶回归测试（14 项断言，issue #2：id/index 分桶分裂 + splitToolCallArguments 兜底）
 ├── test-batch-import.mjs                 # 批量导入解析器测试（14 项断言）
 ├── test-cloud-sync-auto-push.mjs         # 云同步 payload 去重测试（18 项断言，纯函数无 vscode 依赖）
 ├── test-cloud-sync-flow.mjs              # 云同步 push/pull 集成测试（22 项断言，mock fetch + mock vscode）
@@ -662,6 +663,7 @@ test/                                     # 测试脚本（运行前需 npm run 
 | `test/test-anthropic-vision-order.mjs` | ~150 | **Anthropic 视觉历史顺序测试**（2 项断言）：缓冲的工具结果先于视觉历史输出，视觉 tool_use 紧跟其 tool_result（回归：曾先推视觉历史导致顺序颠倒）；运行前需 `npm run compile` |
 | `test/test-image-dimensions.mjs` | ~60 | **图片尺寸解析测试**（5 项断言）：PNG / GIF / JPEG / WebP 尺寸解析（回归：PNG 签名检测错误导致返回 unknown）；运行前需 `npm run compile` |
 | `test/test-sse-stream.mjs` | ~90 | **SSE 流消费测试**（3 项断言）：`[DONE]` 触发 onDone、**无 `[DONE]` 哨兵时也触发 onDone**（回归：曾只在 `[DONE]` 时刷新，导致工具调用被静默丢弃）、onFinally 始终触发；运行前需 `npm run compile` |
+| `test/test-split-tool-call-args.mjs` | ~150 | **工具调用参数拆分/分桶回归测试**（14 项断言，issue #2 兜底）：`splitToolCallArguments` 拆解拼接 JSON（2/3 个并行调用、嵌套花括号、字符串内 `{ }` 与转义引号不误拆、markdown 围栏、空输入/空白、单个 JSON、单引号/中文智能引号 repair 修复、尾逗号、残缺片段丢弃）、`parseToolCallArguments` 对拼接串返回 undefined（需 split 兜底）、真实 A/B 类流式碎片形态重组；运行前需 `npm run compile` |
 | `test/test-cloud-sync-auto-push.mjs` | ~90 | **云同步 payload 去重测试**（18 项断言）：`syncPayloadHasChanged` 的空值/版本/长度/逐字段（value/credential/label）/顺序分支，以及 `undefined` 与 `""` 等价、`updatedAt` 不参与比较、**旧字段名 `cookie` 与 `credential` 等价（向后兼容）**；纯函数无 `vscode` 依赖，运行前需 `npm run compile` |
 | `test/test-cloud-sync-flow.mjs` | ~330 | **云同步 push/pull 集成测试**（22 项断言）：通过 `Module._load` 钩子注入 `vscode` mock + mock `fetch`，驱动真实 `pushToCloud`/`pullFromCloud` 流程——push 新建/PATCH/无变更短路/空 store 警告、**push 记录服务端 `updated_at`（回归：曾记录客户端时间导致 push 后必然多拉一次）**、pull 合并（credential/label 覆盖 + 可用性保留 + 追加新 key）/静默跳过/缓存 gist 失效回退；运行前需 `npm run compile` |
 | `test/test-cloud-sync-e2e.mjs` | ~250 | **云同步真实端到端测试**（16 项断言，`npm run test:e2e`）：用**真实 GitHub Gist API** 驱动生产 `pushToCloud`/`pullFromCloud`，验证 mock 无法覆盖的部分（真实请求体格式/响应结构/`updated_at`/内容往返）。安全设计：创建**专用测试 Gist**（描述带随机后缀）并预置其 id 到 `globalState`，**绝不触碰用户真实同步 Gist**；finally 中删除测试 Gist。凭据从 `GITHUB_TOKEN`/`GH_TOKEN` 或 `gh auth token` 读取，无凭据时 SKIP 退出 0；运行前需 `npm run compile` |
@@ -1804,11 +1806,11 @@ npx tsc --noEmit
 # 持续监视模式
 npm run watch
 
-# 离线测试（7 个，无需 API Key；先自动 compile）
+# 离线测试（12 个脚本，无需 API Key；先自动 compile）
 npm test
 # 等效于: npm run compile && npm run test:offline
 npm run test:offline
-# 等效于: node test/test-plan-usage.mjs && node test/test-transient-retry.mjs && node test/test-vision-history.mjs && node test/test-anthropic-tool-result-merge.mjs && node test/test-batch-import.mjs && node test/test-cloud-sync-auto-push.mjs && node test/test-cloud-sync-flow.mjs
+# 等效于: node test/test-plan-usage.mjs && node test/test-transient-retry.mjs && node test/test-vision-history.mjs && node test/test-anthropic-tool-result-merge.mjs && node test/test-anthropic-image-index.mjs && node test/test-anthropic-vision-order.mjs && node test/test-image-dimensions.mjs && node test/test-sse-stream.mjs && node test/test-split-tool-call-args.mjs && node test/test-batch-import.mjs && node test/test-cloud-sync-auto-push.mjs && node test/test-cloud-sync-flow.mjs
 
 # 云同步真实端到端测试（需 GitHub gist 权限凭据；无凭据时 SKIP 退出 0）
 npm run test:e2e

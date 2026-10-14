@@ -112,7 +112,7 @@ export async function runKeyRotationLoop(params: RotationLoopParams): Promise<vo
             if (hasTransient) {
                 throw new Error(l10nFormat("All API keys are temporarily unavailable ({0}). Please retry later.", detail));
             }
-            throw new Error(l10nFormat("All API keys are unavailable ({0}). Use the Manage API Keys command to check availability.", detail));
+            throw new Error(l10nFormat("All API keys are unavailable ({0}). Use the Manage API Keys command to check availability, or reset exhausted states to recover keys that may have been marked unavailable by mistake.", detail));
         }
 
         // 1. Pick the next candidate key (forced re-use after a platform-side
@@ -165,7 +165,7 @@ export async function runKeyRotationLoop(params: RotationLoopParams): Promise<vo
                     );
                 }
                 throw new Error(
-                    l10nFormat("All API keys are unavailable ({0}). Use the Manage API Keys command to check availability.", detail)
+                    l10nFormat("All API keys are unavailable ({0}). Use the Manage API Keys command to check availability, or reset exhausted states to recover keys that may have been marked unavailable by mistake.", detail)
                 );
             }
         }
