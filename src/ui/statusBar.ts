@@ -1,9 +1,8 @@
 import * as vscode from "vscode";
-import { LanguageModelChatInformation, LanguageModelChatRequestMessage, LanguageModelChatTool } from "vscode";
+import { LanguageModelChatRequestMessage, LanguageModelChatTool } from "vscode";
 import { countMessageTokens, countToolTokens } from "../tokenizer/provideToken";
 import { l10n, l10nFormat } from "../core/localize";
 import { logger } from "../core/logger";
-import type { StreamUsage } from "../api/commonApi";
 import {
     formatBalanceSummary,
     formatBillingModeLine,
@@ -17,22 +16,10 @@ import {
     type PlanUsageSnapshot,
 } from "../balance/balanceCheck";
 
-// Cumulative token counters across the session (reset on VS Code restart)
-let cumulativeInputTokens = 0;
-let cumulativeOutputTokens = 0;
-let cumulativeCacheHitTokens = 0;
-let cumulativeCacheMissTokens = 0;
-
 /** How long the status bar stays visible after the last SenseAudio model request. */
 const STATUS_BAR_HIDE_DELAY_MS = 60 * 1000; // 1 minute of inactivity
 /** Module-level timer for auto-hiding the status bar when SenseAudio models are no longer in use. */
 let statusBarHideTimer: NodeJS.Timeout | null = null;
-/**
- * Last rendered token-count text. Kept so the main text can be restored
- * immediately when `showUsageInStatusBar` is toggled off at runtime
- * (otherwise the plan-usage text would linger until the next request).
- */
-let lastTokenText = "$(pulse) --";
 
 // ── Plan usage polling state (mirrors upstream opencode-go-copilot) ──
 /** Account credential provider, injected by `initStatusBar` (credential lives in the key store). */
@@ -45,20 +32,11 @@ let usagePollTimer: NodeJS.Timeout | undefined;
 let usageRefreshInFlight = false;
 
 /**
- * Whether the plan-usage section is shown in the status bar tooltip.
- * Default on — the tooltip is only visible on hover, so it costs nothing.
+ * Whether the plan-usage status bar is enabled (main text + tooltip).
+ * Default on. When off, the status bar is hidden entirely.
  */
-function isUsageTooltipEnabled(): boolean {
-    return vscode.workspace.getConfiguration().get<boolean>("senseaudio.showUsageInTooltip", true);
-}
-
-/**
- * Whether the status bar main text shows plan usage instead of token counts.
- * Default on — this is the primary value of the status bar for a
- * subscription-based provider (token counts remain in the tooltip).
- */
-function isUsageInStatusBarEnabled(): boolean {
-    return vscode.workspace.getConfiguration().get<boolean>("senseaudio.showUsageInStatusBar", true);
+function isUsageEnabled(): boolean {
+    return vscode.workspace.getConfiguration().get<boolean>("senseaudio.showUsage", true);
 }
 
 /** Background refresh interval in ms (clamped to 1-60 minutes). */
@@ -89,7 +67,7 @@ async function refreshPlanUsage(): Promise<void> {
         const snapshot = await getPlanUsageCached(token);
         if (snapshot && usageStatusBarItem) {
             updateStatusBarUsageText(usageStatusBarItem);
-            updateCumulativeTooltip(usageStatusBarItem);
+            updateStatusBarTooltip(usageStatusBarItem);
         }
     } finally {
         usageRefreshInFlight = false;
@@ -107,8 +85,8 @@ function stopUsagePolling(): void {
 function startUsagePolling(): void {
     stopUsagePolling();
     // Don't poll when nothing consumes the data — the status bar is hidden
-    // entirely (both the plan-usage display and the token indicator are off),
-    // so polling would only add needless network traffic.
+    // entirely (both the plan-usage main text and tooltip are off), so polling
+    // would only add needless network traffic.
     if (!isStatusBarEnabled()) {
         logger.debug("planUsage.poll.skip", { reason: "status-bar-disabled" });
         return;
@@ -141,7 +119,7 @@ export async function refreshPlanUsageNow(): Promise<PlanUsageSnapshot | null> {
         const snapshot = await getPlanUsageCached(token, true);
         if (usageStatusBarItem) {
             updateStatusBarUsageText(usageStatusBarItem);
-            updateCumulativeTooltip(usageStatusBarItem);
+            updateStatusBarTooltip(usageStatusBarItem);
         }
         return snapshot;
     } finally {
@@ -152,23 +130,15 @@ export async function refreshPlanUsageNow(): Promise<PlanUsageSnapshot | null> {
 /**
  * Render the status bar main text.
  *
- * Layout (2026-10-10 改版):
- * - 套餐额度内（billingMode=plan）→ `$(pulse) 65% 30% 12%`（5h/周/月三窗口百分比，空格分隔）
+ * Layout:
+ * - 套餐额度内（billingMode=plan）→ `$(pulse) 65%`（5 小时窗口已用百分比）
  * - 用余额（billingMode=extra/free，月度额度耗尽）→ `$(pulse) ¥12.34`（现金+代金券合计）
  * - no data yet → `$(pulse) --`
- * - plan usage disabled → restore the token-count text (legacy behaviour)
  *
  * 区分依据：`isPlanExhausted`（只看月度额度窗口）——月度额度耗尽即进入
- * 超额计费（代金券→现金），此时显示余额；额度内显示三窗口百分比。
+ * 超额计费（代金券→现金），此时显示余额；额度内显示 5 小时窗口已用百分比。
  */
 function updateStatusBarUsageText(statusBarItem: vscode.StatusBarItem): void {
-    if (!isUsageInStatusBarEnabled()) {
-        // Restore the token-count text so toggling the setting off takes
-        // effect immediately (instead of leaving the plan-usage text until
-        // the next request re-renders it).
-        statusBarItem.text = lastTokenText;
-        return;
-    }
     const snapshot = getPlanUsageSnapshot();
     if (!snapshot) {
         statusBarItem.text = `$(pulse) --`;
@@ -179,13 +149,13 @@ function updateStatusBarUsageText(statusBarItem: vscode.StatusBarItem): void {
         statusBarItem.text = `$(pulse) ${formatBalanceSummary(snapshot)}`;
         return;
     }
-    // 套餐额度内：显示 5h/周/月三窗口百分比，空格分隔
-    const percents = snapshot.rateLimitWindows.map((w) => `${getWindowPercent(w)}%`);
-    if (percents.length === 0) {
+    // 套餐额度内：显示 5 小时窗口已用百分比
+    const primary = getPrimaryWindow(snapshot);
+    if (!primary) {
         statusBarItem.text = `$(pulse) --`;
         return;
     }
-    statusBarItem.text = `$(pulse) ${percents.join(" ")}`;
+    statusBarItem.text = `$(pulse) ${getWindowPercent(primary)}%`;
 }
 
 /**
@@ -204,7 +174,7 @@ function updateStatusBarUsageText(statusBarItem: vscode.StatusBarItem): void {
  * ```
  */
 function appendPlanUsageTooltipLines(lines: string[]): void {
-    if (!isUsageTooltipEnabled()) {
+    if (!isUsageEnabled()) {
         return;
     }
     const snapshot = getPlanUsageSnapshot();
@@ -234,13 +204,10 @@ export function initStatusBar(
     context: vscode.ExtensionContext,
     getCredential?: () => Promise<string | undefined>,
 ): vscode.StatusBarItem {
-    // Reset cumulative counters on VS Code startup
-    resetCumulativeCounters();
-
     const tokenCountStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-    tokenCountStatusBarItem.name = l10n("Token Count");
+    tokenCountStatusBarItem.name = l10n("Remaining Usage");
     tokenCountStatusBarItem.text = `$(pulse) --`;
-    tokenCountStatusBarItem.tooltip = l10n("Plan usage and token usage");
+    tokenCountStatusBarItem.tooltip = l10n("Remaining Usage");
     // Clicking the status bar refreshes the plan usage immediately
     tokenCountStatusBarItem.command = "senseaudio.checkUsage";
     context.subscriptions.push(tokenCountStatusBarItem);
@@ -255,59 +222,45 @@ export function initStatusBar(
     context.subscriptions.push(
         vscode.workspace.onDidChangeConfiguration((e) => {
             const usageSettingChanged =
-                e.affectsConfiguration("senseaudio.showUsageInTooltip") ||
-                e.affectsConfiguration("senseaudio.showUsageInStatusBar") ||
+                e.affectsConfiguration("senseaudio.showUsage") ||
                 e.affectsConfiguration("senseaudio.usageRefreshInterval");
-            const indicatorChanged = e.affectsConfiguration("senseaudio.enableThirdPartyTokenIndicator");
-            if (!usageSettingChanged && !indicatorChanged) {
+            if (!usageSettingChanged) {
                 return;
             }
             // Re-evaluate polling (starts when enabled, stops when the whole
             // status bar is disabled) and re-render both text and tooltip.
             startUsagePolling();
-            updateStatusBarUsageText(tokenCountStatusBarItem);
-            updateCumulativeTooltip(tokenCountStatusBarItem);
-            if (indicatorChanged) {
-                if (isStatusBarEnabled()) {
-                    tokenCountStatusBarItem.show();
-                } else {
-                    tokenCountStatusBarItem.hide();
-                }
+            if (isStatusBarEnabled()) {
+                tokenCountStatusBarItem.show();
+                updateStatusBarUsageText(tokenCountStatusBarItem);
+                updateStatusBarTooltip(tokenCountStatusBarItem);
+            } else {
+                tokenCountStatusBarItem.hide();
             }
         })
     );
 
     // 常态化显示（2026-10-10 改版）：不再静默隐藏，启动即显示并保持常显。
-    tokenCountStatusBarItem.show();
+    if (isStatusBarEnabled()) {
+        tokenCountStatusBarItem.show();
+    }
     return tokenCountStatusBarItem;
-}
-
-/**
- * Whether the extension's own (advanced) token indicator is enabled.
- * Default off — the native Copilot indicator is always reported separately.
- */
-function isThirdPartyIndicatorEnabled(): boolean {
-    return vscode.workspace.getConfiguration().get<boolean>("senseaudio.enableThirdPartyTokenIndicator", false);
 }
 
 /**
  * Whether the extension status bar should be shown at all.
  *
- * The status bar carries **two independent features**:
- * - plan usage (main text + tooltip section) — `showUsageInStatusBar` / `showUsageInTooltip`
- * - advanced token counter — `enableThirdPartyTokenIndicator`
- *
- * It must be visible when **either** is enabled. Gating it solely on the token
- * indicator (default off) would make the plan-usage display unreachable.
+ * The status bar carries the plan-usage display (main text + tooltip section),
+ * controlled by `showUsage`. It is hidden when that is disabled.
  */
 function isStatusBarEnabled(): boolean {
-    return isThirdPartyIndicatorEnabled() || isUsageInStatusBarEnabled() || isUsageTooltipEnabled();
+    return isUsageEnabled();
 }
 
 /**
  * Show the status bar and cancel any pending auto-hide.
  * Called when a chat request starts using one of this extension's models.
- * No-op when both the plan-usage display and the token indicator are disabled.
+ * Hidden when the plan-usage display is disabled.
  */
 export function showTokenStatusBar(statusBarItem: vscode.StatusBarItem): void {
     if (!isStatusBarEnabled()) {
@@ -335,51 +288,16 @@ export function scheduleStatusBarHide(statusBarItem: vscode.StatusBarItem, delay
 }
 
 /**
- * Format number to thousands (K, M, B) format.
- */
-export function formatTokenCount(value: number): string {
-    if (value >= 1_000_000_000) {
-        return (value / 1_000_000_000).toFixed(1) + "B";
-    } else if (value >= 1_000_000) {
-        return (value / 1_000_000).toFixed(1) + "M";
-    } else if (value >= 1_000) {
-        return (value / 1_000).toFixed(1) + "K";
-    }
-    return value.toLocaleString();
-}
-
-/**
- * Create a visual progress bar showing token usage.
- */
-export function createProgressBar(usedTokens: number, maxTokens: number): string {
-    const blocks = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
-    const usagePercentage = Math.min((usedTokens / maxTokens) * 100, 100);
-    const blockIndex = Math.min(Math.floor((usagePercentage / 100) * blocks.length), blocks.length - 1);
-
-    return `${blocks[blockIndex]} ${usagePercentage.toFixed(1)}%`;
-}
-
-/**
- * Update the status bar with token usage information.
- * Resets cumulative counters when a new conversation starts
- * (no assistant messages in the history).
- * @returns The estimated input token count (for fallback usage).
+ * Refresh the status bar (plan-usage main text + tooltip) for the current request.
+ * @returns The estimated input token count (for fallback usage reporting).
  */
 export async function updateContextStatusBar(
     messages: readonly LanguageModelChatRequestMessage[],
     tools: readonly LanguageModelChatTool[] | undefined,
-    model: LanguageModelChatInformation,
     statusBarItem: vscode.StatusBarItem,
     modelConfig: { includeReasoningInRequest: boolean }
 ): Promise<number> {
     try {
-        // Detect new conversation: no assistant messages → reset cumulative counters
-        const ASSISTANT = vscode.LanguageModelChatMessageRole.Assistant as unknown as number;
-        const hasAssistantMessages = messages.some(m => (m.role as unknown as number) === ASSISTANT);
-        if (!hasAssistantMessages) {
-            resetCumulativeCounters();
-        }
-
         let totalTokens = 0;
 
         for (const message of messages) {
@@ -390,67 +308,12 @@ export async function updateContextStatusBar(
             totalTokens += await countToolTokens(tools);
         }
 
-        const maxTokens = model.maxInputTokens || 128000;
-        const progressBar = createProgressBar(totalTokens, maxTokens);
-        const formattedTokens = formatTokenCount(totalTokens);
-
-        if (isUsageInStatusBarEnabled()) {
-            // Plan usage owns the main text; token counts live in the tooltip.
-            updateStatusBarUsageText(statusBarItem);
-        } else {
-            lastTokenText = `$(symbol-numeric) ${formattedTokens} ${progressBar}`;
-            statusBarItem.text = lastTokenText;
-        }
-        // Always show cumulative tooltip (not per-request) to avoid flickering
-        updateCumulativeTooltip(statusBarItem);
+        // Plan usage owns the main text; refresh it and the tooltip.
+        updateStatusBarUsageText(statusBarItem);
+        updateStatusBarTooltip(statusBarItem);
         return totalTokens;
     } catch {
-        lastTokenText = "$(symbol-numeric) ?";
-        statusBarItem.text = lastTokenText;
         return 0;
-    }
-}
-
-/**
- * Update the status bar main text using API-reported prompt token count.
- * Called when API returns usage data, overriding the initial client-side estimate.
- * No-op on the main text when plan usage owns it (token counts stay in the tooltip).
- */
-export function updateStatusBarWithApiPrompt(
-    apiPromptTokens: number,
-    maxTokens: number,
-    statusBarItem: vscode.StatusBarItem
-): void {
-    if (!isUsageInStatusBarEnabled()) {
-        const progressBar = createProgressBar(apiPromptTokens, maxTokens);
-        const formattedTokens = formatTokenCount(apiPromptTokens);
-        lastTokenText = `$(symbol-numeric) ${formattedTokens} ${progressBar}`;
-        statusBarItem.text = lastTokenText;
-    }
-    updateCumulativeTooltip(statusBarItem);
-}
-
-/**
- * Reset all cumulative token counters (called on VS Code startup and new conversation).
- */
-export function resetCumulativeCounters(): void {
-    cumulativeInputTokens = 0;
-    cumulativeOutputTokens = 0;
-    cumulativeCacheHitTokens = 0;
-    cumulativeCacheMissTokens = 0;
-}
-
-/**
- * Record streaming usage data into cumulative counters.
- */
-export function recordUsage(usage: StreamUsage): void {
-    cumulativeInputTokens += usage.promptTokens;
-    cumulativeOutputTokens += usage.completionTokens;
-    if (usage.cacheHitTokens !== undefined) {
-        cumulativeCacheHitTokens += usage.cacheHitTokens;
-    }
-    if (usage.cacheMissTokens !== undefined) {
-        cumulativeCacheMissTokens += usage.cacheMissTokens;
     }
 }
 
@@ -461,11 +324,11 @@ export function recordUsage(usage: StreamUsage): void {
  * 2026-10-10 改版：累计 Token 部分（↑/↓ 箭头行）已移除——VS Code 原生
  * 会话 Token 指示器已覆盖该信息，tooltip 仅保留套餐用量 + 余额。
  */
-export function updateCumulativeTooltip(statusBarItem: vscode.StatusBarItem): void {
+function updateStatusBarTooltip(statusBarItem: vscode.StatusBarItem): void {
     const lines: string[] = [];
 
     // SenseAudio plan usage + balance (optional)
     appendPlanUsageTooltipLines(lines);
 
-    statusBarItem.tooltip = lines.length > 0 ? lines.join("\n") : l10n("Plan usage and token usage");
+    statusBarItem.tooltip = lines.length > 0 ? lines.join("\n") : l10n("Remaining Usage");
 }

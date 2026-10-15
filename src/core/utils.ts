@@ -12,9 +12,9 @@ const RETRY_MAX_INTERVAL_MS = 60000;
 //
 // Deliberately limited to **gateway** errors (502/504) — a quick retry often
 // clears a transient gateway blip. Platform errors that the whole-round retry
-// already handles (429/500/503, see `senseaudio.transientRetryStatusCodes`)
-// are intentionally ABSENT: retrying them here first would multiply the two
-// retry layers (maxAttempts × (transientRetryTimes + 1) attempts) and delay
+// already handles (429/500/503, see `senseaudio.transientRetryTimes`) are
+// intentionally ABSENT: retrying them here first would multiply the two retry
+// layers (maxAttempts × (transientRetryTimes + 1) attempts) and delay
 // failover to another key. Network errors are retried separately via
 // `networkErrorPatterns` below.
 const RETRYABLE_STATUS_CODES = [502, 504];
@@ -108,7 +108,6 @@ export function createRetryConfig(): RetryConfig {
     const enabled = config.get<boolean>("enabled", true);
     const maxAttempts = config.get<number>("maxAttempts", RETRY_MAX_ATTEMPTS);
     const intervalMs = config.get<number>("intervalMs", RETRY_INTERVAL_MS);
-    const additionalStatusCodes = config.get<number[]>("statusCodes", []);
 
     return {
         enabled,
@@ -116,7 +115,7 @@ export function createRetryConfig(): RetryConfig {
         intervalMs,
         backoffFactor: RETRY_BACKOFF_FACTOR,
         maxIntervalMs: RETRY_MAX_INTERVAL_MS,
-        statusCodes: [...RETRYABLE_STATUS_CODES, ...additionalStatusCodes],
+        statusCodes: RETRYABLE_STATUS_CODES,
     };
 }
 

@@ -13,7 +13,7 @@ import type { ApiKeyEntry, ApiKeyMode, ApiKeyStore } from "./types";
 /**
  * 获取主 key（模型列表 / 启动同步等"任意有效 key 即可"的场景）。
  * - single → active key（跳过瞬态冷却与持久化不可用）
- * - sticky → 当前钉住的 key（不可用时从游标环形扫描第一个可用 key）
+ * - sticky → 当前钉住的 key（activeIndex；不可用时从该位置环形扫描第一个可用 key）
  * - rotation → 第一个可用的 key
  * 全部不可用时返回 undefined。注意：模型列表不校验余额（实测），无需关心 available 余额标记。
  */
@@ -23,12 +23,26 @@ export async function getPrimaryApiKey(secrets: vscode.SecretStorage): Promise<A
         return undefined;
     }
 
-    if (getApiKeyMode() === "single") {
+    const mode = getApiKeyMode();
+    if (mode === "single") {
         const entry = store.keys[store.activeIndex] ?? store.keys[0];
         return isApiKeyEligible(entry) ? entry : undefined;
     }
 
-    // rotation / sticky：从游标开始环形扫描
+    if (mode === "sticky") {
+        // sticky：优先使用当前钉住的 key（activeIndex），不可用时从该位置环形扫描
+        // 第一个可用 key。本函数只读（供模型列表等场景），不修改钉住位置。
+        const start = store.activeIndex;
+        for (let i = 0; i < store.keys.length; i++) {
+            const entry = store.keys[(start + i) % store.keys.length];
+            if (isApiKeyEligible(entry)) {
+                return entry;
+            }
+        }
+        return undefined;
+    }
+
+    // rotation：从游标开始环形扫描
     const rotationIndex = getRotationIndex();
     for (let i = 0; i < store.keys.length; i++) {
         const entry = store.keys[(rotationIndex + i) % store.keys.length];
@@ -42,9 +56,10 @@ export async function getPrimaryApiKey(secrets: vscode.SecretStorage): Promise<A
 /**
  * 选择下一个要使用的 key。
  * - rotation：从游标开始环形扫描第一个可用 key，游标前移一位（每次请求都换 key）
- * - sticky：从游标开始环形扫描第一个可用 key，游标钉住不前移（固定使用该 key，
- *   仅当它失效——余额不足/401/429/503 等——变 ineligible 后下次才会切到下一个并钉住；
- *   原 key 恢复后不自动切回，保持前缀缓存亲和性）
+ * - sticky：从当前钉住的 key（activeIndex）开始环形扫描第一个可用 key，命中后钉住
+ *   （更新 activeIndex 并持久化）。仅当它失效——余额不足/401/429/503 等——变
+ *   ineligible 后下次才会切到下一个并钉住；原 key 恢复后不自动切回，保持前缀缓存亲和性。
+ *   用户可在「管理 API Keys」界面手动「设为当前使用」指定钉住的 key。
  * - single：返回 active key（不可用返回 undefined，由调用方按 fallback 决定报错或降级为 rotation）
  */
 export async function pickNextApiKey(
@@ -61,17 +76,31 @@ export async function pickNextApiKey(
         return isApiKeyEligible(entry) ? entry : undefined;
     }
 
-    // rotation / sticky：从 rotationIndex 开始顺序查找第一个 eligible 的 key
+    if (mode === "sticky") {
+        // sticky：从当前钉住的 key（activeIndex）开始环形扫描第一个可用 key，
+        // 命中后钉住（更新 activeIndex 并持久化）。原 key 恢复后不自动切回，
+        // 保持前缀缓存亲和性。
+        const start = store.activeIndex;
+        for (let i = 0; i < store.keys.length; i++) {
+            const idx = (start + i) % store.keys.length;
+            if (isApiKeyEligible(store.keys[idx])) {
+                if (idx !== store.activeIndex) {
+                    store.activeIndex = idx;
+                    await saveApiKeyStore(secrets, store);
+                }
+                return store.keys[idx];
+            }
+        }
+        return undefined;
+    }
+
+    // rotation：从 rotationIndex 开始顺序查找第一个 eligible 的 key，游标前移
     const rotationIndex = getRotationIndex();
     for (let i = 0; i < store.keys.length; i++) {
         const idx = (rotationIndex + i) % store.keys.length;
         const entry = store.keys[idx];
         if (isApiKeyEligible(entry)) {
-            if (mode === "rotation") {
-                setRotationIndex((idx + 1) % store.keys.length); // 游标前移到下一个
-            } else {
-                setRotationIndex(idx); // sticky：钉住当前 key，不前移
-            }
+            setRotationIndex((idx + 1) % store.keys.length);
             return entry;
         }
     }

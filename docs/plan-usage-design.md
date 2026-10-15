@@ -147,7 +147,7 @@ initStatusBar(context, getCredential)
               └── getPlanUsageCached(token)  ← TTL 缓存（默认 60s）
                     └── getAccountInfoWithStatus()
                           └── queryAccountInfo()  ← GET /api/user/self
-              └── updateStatusBarUsageText() + updateCumulativeTooltip()
+              └── updateStatusBarUsageText() + updateStatusBarTooltip()
 
 点击状态栏（senseaudio.checkUsage）
   └── refreshPlanUsageNow()                  ← force=true 绕过 TTL
@@ -170,10 +170,10 @@ initStatusBar(context, getCredential)
 
 | 状态 | 文本 |
 |------|------|
-| 有数据，额度内 | `$(pulse) 5H 65%` |
+| 有数据，额度内 | `$(pulse) 65%`（5 小时窗口已用百分比） |
 | 有数据，额度耗尽 | `$(pulse) 余额 ¥358.78` |
 | 无数据 | `$(pulse) --` |
-| `showUsageInStatusBar=false` | `$(symbol-numeric) 12.3K ▅ 45.2%`（Token 计数，旧行为） |
+| `showUsage=false` | 状态栏隐藏 |
 
 ### 5.2 悬停提示
 
@@ -194,26 +194,23 @@ Month——100% (10,012 / 10,000 积分)
 
 | 配置 | 默认 | 说明 |
 |------|------|------|
-| `senseaudio.showUsageInStatusBar` | `true` | 主文本显示套餐用量（关闭则显示 Token 计数） |
-| `senseaudio.showUsageInTooltip` | `true` | 悬停提示显示套餐用量区块 |
+| `senseaudio.showUsage` | `true` | 状态栏显示套餐用量（主文本 + 悬停提示区块；关闭则隐藏状态栏） |
 | `senseaudio.usageRefreshInterval` | `5` | 后台刷新间隔（分钟，1-60） |
-| `senseaudio.enableThirdPartyTokenIndicator` | `false` | 是否显示高级 Token 计数器 |
 | `senseaudio.minBalanceCny` | `0` | 余额阈值（合计可用 ≤ 该值标记 error 图标） |
 | `senseaudio.balanceCheckIntervalSec` | `60` | 账号信息缓存 TTL（秒） |
 
-### 5.4 ⚠️ 状态栏可见性（易踩坑）
+### 5.4 ⚠️ 状态栏可见性
 
-状态栏承载**两个独立功能**：套餐用量 + 高级 Token 计数器。可见性由
+状态栏承载套餐用量显示（主文本 + 悬停提示区块）。可见性由
 `isStatusBarEnabled()` 决定：
 
 ```ts
-isThirdPartyIndicatorEnabled() || isUsageInStatusBarEnabled() || isUsageTooltipEnabled()
+isUsageEnabled()   // = senseaudio.showUsage
 ```
 
-**不能**只用 `enableThirdPartyTokenIndicator` 控制——它默认 `false`，
-若用它单独把关，套餐用量功能将**永远不可见**（这是实现过程中踩过的坑）。
+状态栏启动即显示并保持常显（2026-10-10 改版，不再空闲隐藏）。
 
-状态栏仍保留「仅在使用本插件模型时显示、空闲 60 秒后隐藏」的行为。
+> 2026-10-15：旧版 `senseaudio.enableThirdPartyTokenIndicator`（高级 Token 计数器）已删除；`showUsageInStatusBar` / `showUsageInTooltip` 两个开关已合并为单一 `senseaudio.showUsage`。
 
 ---
 

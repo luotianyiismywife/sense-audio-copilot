@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 
 const zhCN: Record<string, string> = {
 	// statusBar
-	"Token Count": "Token 计数",
+	"Remaining Usage": "剩余用量",
 	// extension.ts - API key prompts
 	"Enter your SenseAudio API key": "输入您的 SenseAudio API 密钥",
 
@@ -10,8 +10,6 @@ const zhCN: Record<string, string> = {
 	"SenseAudio API key not found": "未找到 SenseAudio API 密钥",
 	"Invalid base URL configuration.": "无效的 Base URL 配置。",
 
-	// statusBar cache tooltip
-	"({0} cached, {1}%)": "(已缓存 {0}, 命中率 {1}%)",
 	"No changes found in any workspace repositories.": "在任何工作区仓库中均未发现更改。",
 	"Git extension not found": "未找到 Git 扩展",
 	"No Git repositories available": "没有可用的 Git 仓库",
@@ -105,7 +103,7 @@ const zhCN: Record<string, string> = {
 	"API key added": "API Key 已添加",
 	"Select an API key to manage": "选择要管理的 API Key",
 	"Set as current API key": "已设为当前 API Key",
-	"Set as Current is only valid in single mode (apiKeyMode=single)": "「设为当前使用」仅在 single 模式下有效（apiKeyMode=single）",
+	"Set as Current is only valid in single/sticky mode (apiKeyMode=single or sticky)": "「设为当前使用」仅在 single/sticky 模式下有效（apiKeyMode=single 或 sticky）",
 	"Reset exhausted key states": "已重置失效状态",
 	"Enter the platform login credential (PASETO token) for this key": "输入该 key 对应的平台登录凭据（PASETO token，留空清除）",
 	"Credential updated": "凭据已更新",
@@ -134,7 +132,6 @@ const zhCN: Record<string, string> = {
 	"Cloud sync is already in progress": "云同步正在进行中，请稍后再试",
 
 	// statusBar.ts / checkUsageCommand.ts - 套餐用量与余额
-	"Plan usage and token usage": "套餐用量与 Token 用量",
 	"5H": "5H",
 	"Balance": "余额",
 	"5h window resets in {0}": "五小时窗口将在 {0} 后重置",

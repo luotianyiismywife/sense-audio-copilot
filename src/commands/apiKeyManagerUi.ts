@@ -43,9 +43,11 @@ export async function showApiKeyManager(context: vscode.ExtensionContext): Promi
 
     const render = async (): Promise<vscode.QuickPickItem[] | undefined> => {
         const store = await getApiKeyStore(ctx.secrets);
-        // "Set as Current" only makes sense in single mode; in rotation mode it
-        // is hidden entirely.
-        const isSingleMode = getApiKeyMode() === "single";
+        // "Set as Current" pins the key used in single mode (active key) and
+        // sticky mode (pinned key). In rotation mode the round-robin cursor is
+        // used, so the action is hidden entirely.
+        const mode = getApiKeyMode();
+        const canSetCurrent = mode === "single" || mode === "sticky";
         const items: (vscode.QuickPickItem & { action?: string; index?: number })[] = [];
 
         if (store.keys.length === 0) {
@@ -59,8 +61,9 @@ export async function showApiKeyManager(context: vscode.ExtensionContext): Promi
         items.push({ label: `$(import) ${l10n("Import API Keys (batch)")}`, action: "import" });
         if (store.keys.length > 0) {
             items.push({ label: `$(trash) ${l10n("Delete API Key")}`, action: "delete" });
-            // "Set as Current" only matters in single mode — hide it entirely in rotation mode.
-            if (isSingleMode) {
+            // "Set as Current" pins the key used in single/sticky mode — hide it
+            // entirely in rotation mode (round-robin by design).
+            if (canSetCurrent) {
                 items.push({ label: `$(star) ${l10n("Set as Current")}`, action: "setActive" });
             }
             items.push({ label: `$(edit) ${l10n("Edit API Key")}`, action: "edit" });
@@ -107,10 +110,11 @@ export async function showApiKeyManager(context: vscode.ExtensionContext): Promi
                 break;
             }
             case "setActive": {
-                // "Set as Current" only takes effect in single mode; in rotation
-                // mode the active index is ignored (round-robin cursor is used).
-                if (getApiKeyMode() !== "single") {
-                    vscode.window.showInformationMessage(l10n("Set as Current is only valid in single mode (apiKeyMode=single)"));
+                // "Set as Current" pins the key used in single mode (active key)
+                // and sticky mode (pinned key); in rotation mode the round-robin
+                // cursor is used, so the action is not offered.
+                if (getApiKeyMode() === "rotation") {
+                    vscode.window.showInformationMessage(l10n("Set as Current is only valid in single/sticky mode (apiKeyMode=single or sticky)"));
                     break;
                 }
                 const keyPick = await pickKey(ctx, l10n("Set as Current"));

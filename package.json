@@ -320,11 +320,6 @@
 					"default": false,
 					"description": "%config.visionProxyThinking.desc%"
 				},
-				"senseaudio.enableThirdPartyTokenIndicator": {
-					"type": "boolean",
-					"default": false,
-					"description": "%config.enableThirdPartyTokenIndicator.desc%"
-				},
 				"senseaudio.apiMode": {
 					"type": "string",
 					"default": "auto",
@@ -482,15 +477,10 @@
 					"default": false,
 					"description": "%config.cloudSyncAutoPush.desc%"
 				},
-				"senseaudio.showUsageInStatusBar": {
+				"senseaudio.showUsage": {
 					"type": "boolean",
 					"default": true,
-					"description": "%config.showUsageInStatusBar.desc%"
-				},
-				"senseaudio.showUsageInTooltip": {
-					"type": "boolean",
-					"default": true,
-					"description": "%config.showUsageInTooltip.desc%"
+					"description": "%config.showUsage.desc%"
 				},
 				"senseaudio.usageRefreshInterval": {
 					"type": "number",
@@ -547,14 +537,6 @@
 					"default": 1000,
 					"minimum": 0,
 					"description": "%config.retry.intervalMs.desc%"
-				},
-				"senseaudio.retry.statusCodes": {
-					"type": "array",
-					"items": {
-						"type": "number"
-					},
-					"default": [],
-					"description": "%config.retry.statusCodes.desc%"
 				}
 			}
 		}

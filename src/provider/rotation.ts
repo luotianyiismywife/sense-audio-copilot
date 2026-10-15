@@ -19,7 +19,7 @@ import {
     type ApiKeyEntry,
     type ErrorRule,
 } from "../keys/keyManager";
-import { buildAllKeysUnavailableDetail, tryTransientRetryRound, VisionRoundError } from "./errors";
+import { buildAllKeysUnavailableDetail, TransientRetryExhaustedError, tryTransientRetryRound, VisionRoundError } from "./errors";
 
 /**
  * 多 API Key 轮换循环。
@@ -30,8 +30,8 @@ import { buildAllKeysUnavailableDetail, tryTransientRetryRound, VisionRoundError
  * 则按 `senseaudio.transientRetryTimes` 指数退避重试整轮。
  *
  * **平台侧瞬态错误（如 500）不换 key**：500 是平台内部错误，与 key 无关，
- * 换 key 无意义。这类错误命中 `transientRetryStatusCodes` 但**不**命中
- * `apiKeyRotationStatusCodes` 时，仅退避后重试整轮（key 不标记失效）。
+ * 换 key 无意义。这类错误命中 `errorRules` 的 `retrySameKey` 动作（而非
+ * `rotateCooldown` / `rotatePersist`）时，仅退避后重试同一个 key（key 不标记失效）。
  *
  * 从 `provider.ts` 抽出，使 Provider 类只负责 VS Code 接口与编排。
  */
@@ -251,6 +251,8 @@ export async function runKeyRotationLoop(params: RotationLoopParams): Promise<vo
                     key: maskApiKey(currentEntry.value),
                     attempts: sameKeyRetryCount,
                 });
+                // 重试次数用尽：包装为友好错误（原始 500/429 报错对用户过于原始）
+                throw new TransientRetryExhaustedError(err, sameKeyRetryCount);
             }
 
             throw err; // 未命中任何规则（403/网络/IMAGE_SENSITIVE…）

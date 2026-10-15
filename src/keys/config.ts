@@ -1,5 +1,4 @@
 import * as vscode from "vscode";
-import { getRotationIndex } from "./state";
 import type { ApiKeyMode, SingleKeyFallback } from "./types";
 
 /**
@@ -40,11 +39,6 @@ export function getApiKeyMode(): ApiKeyMode {
         return mode;
     }
     return "sticky";
-}
-
-/** 读取当前轮询/粘性游标下标（供 UI 标记 sticky 模式下固定的 key） */
-export function getRotationCursorIndex(): number {
-    return getRotationIndex();
 }
 
 /** 读取 single 模式不可用时的行为（默认 switch；非法值回退 switch） */

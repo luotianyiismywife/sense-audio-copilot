@@ -27,7 +27,7 @@
 | 能力 | 说明 |
 |------|------|
 | **Chat 模型提供商** | 实现 `LanguageModelChatProvider` 接口，向 VS Code 注册为 `senseaudio` 厂商 |
-| **多 API Key 轮询** | 支持多个 API Key（SecretStorage 加密存储 `senseaudio.apiKeys`），三种模式：`sticky`（默认，固定使用一个 key，仅失效时切下一个并钉住——前缀缓存命中率最高，切换后不自动切回）/ `rotation`（轮询使用、跳过不可用 key）/ `single`（仅用当前 key；`senseaudio.singleKeyFallback`（默认 `switch`）下**仅在余额不足（402）时**自动切换到下一个可用 key 并经 `setActiveKeyByValue` 设为当前使用 + 右下角弹窗提示——401 无效 Key / 429 限流 / 503 繁忙等其他错误不切换、走 single 专属报错文案；`error` 下任何错误都直接报错不切换）。**被动检测**：**只配置 `senseaudio.errorRules` 一处**（四元组：code + message + statusCode + action，`src/keys/config.ts` 的 `getErrorRules`）。按数组顺序匹配，首个命中即生效：`code`（错误体 error.code 精确匹配，**主要匹配字段**）优先于 `statusCode`（HTTP 状态码兑底）；`message` 仅作可读性说明**不参与匹配**。`action` 与 key 状态一一对应：`retrySameKey` → 状态不变（不换 key，退避后重试同一个 key）、`rotateCooldown` → 冷却中（换 key，仅内存冷却，到期自动恢复）、`rotatePersist` → 不可用（换 key，持久化 available=false）。默认规则基于实测：封号（`code=billing`，400）→ 不可用；上游流中断（`code=upstream_stream_error`，400）→ 不换重试；余额不足（`code=INSUFFICIENT_BALANCE`，402）→ 不可用；限流（429/503）→ 冷却**手动检测**：`senseaudio.manageApiKeys` 命令 QuickPick 管理（增删/设为当前/绑定平台登录凭据/重置失效/检测可用性——最小真实聊天请求 `say ok`，实测余额不足时 402 拦截不耗 token）。**UI 增强**：表单式批量导入（三元组 key/凭据/备注，逐条输入）、检测二级界面（列出全部 key 状态 + "检测所有"选项）、编辑 API Key（三字段 value/凭据/label，冲突校验）、**轮询模式下隐藏"设为当前使用"**（★ Current 标记与动作项均仅 single 模式显示）、批量导入时已存在 key 自动更新凭据不重复添加、**所有 key 管理界面（主界面 / 检测二级界面 / 删除·设当前·编辑·绑定·清除凭据的 key 选择界面）均显示账号余额**（key 绑定的平台登录凭据经 `getAccountInfoCached` TTL 缓存查询 `platform.senseaudio.cn/api/user/self`，余额按**账号**粒度、所有 key 共享：现金余额显示 `$(coin)/$(error) 充值 ¥X.XX`（> `minBalanceCny` 为 coin、≤ 为 error），代金券可用显示 `$(gift) 赠送 ¥Y.YY`（> 0 时显示，附 `（至 YYYY-MM-DD）` 最早到期日，本地时区格式化），查询失败显示 `$(warning) 余额未知`）。**全部 key 用尽时**：轮换循环跟踪每个 key 的失败原因，报错列出脱敏 key + 原因（如 `sk_****abcd: 服务端繁忙 (503)`），并区分"瞬态失败请稍后重试"（429/503）与"确定性失败请检测"（402/401）；`pickNextApiKey` 无可用 key 的兜底报错同样列出每个 key 的原因（`buildAllKeysUnavailableDetail`）。**瞬态自动重试**：全部 key 均因瞬态错误（默认 429/500/503，状态码可配置 `senseaudio.transientRetryStatusCodes`，与触发轮换的状态码解耦）失败时，按 `senseaudio.transientRetryTimes`（默认 3）自动重试整轮——指数退避等待（2s/4s/8s，上限 8s）且**重试前清空瞬态冷却**（`resetExhaustedKeys(secrets,false)`，否则冷却期间 `pickNextApiKey` 会跳过全部 key 使重试无效），重试次数用尽后才报错。**平台侧错误不换 key**：500 Internal Server Error 是平台问题而非 key 问题——它命中瞬态重试但**不**命中轮换状态码，因此**不标记 key、不换 key**，仅退避后重试同一个 key（日志 `key.transientRetrySameKey`）。**错误分类统一为 `errorRules` 四元组**（2026-10-09）：只配置 `senseaudio.errorRules` 一处（code + message + statusCode + action），`matchErrorRule` 按数组顺序匹配——`code`（错误体 error.code 精确匹配）优先于 `statusCode` 兜底，`message` 仅作说明；`action` 与 key 状态一一对应（`retrySameKey` 状态不变 / `rotateCooldown` 冷却中 / `rotatePersist` 不可用）。默认规则：封号（`code=billing`，400）→ 不可用；上游流中断（`code=upstream_stream_error`，400）→ 不换重试；余额不足（`code=INSUFFICIENT_BALANCE`，402）→ 不可用；限流（429/503）→ 冷却。旧版单 key `senseaudio.apiKey` 自动迁移。`/v1/models` 实测不校验余额（余额 < 0 也 200），模型列表/启动同步用任意有效 key 即可。**key 三元组不随 VS Code 设置同步（2026-10-07 确认）**：SecretStorage 数据被 VS Code Settings Sync 设计上排除（每台机器独立加密，永不同步）——换机器/重装后 key 列表为空；跨机器迁移走下方「云同步（GitHub Gist）」的 `senseaudio.syncPush` / `syncPull`，或手动批量导入重新录入 |
+| **多 API Key 轮询** | 支持多个 API Key（SecretStorage 加密存储 `senseaudio.apiKeys`），三种模式：`sticky`（默认，固定使用一个 key，仅失效时切下一个并钉住——前缀缓存命中率最高，切换后不自动切回）/ `rotation`（轮询使用、跳过不可用 key）/ `single`（仅用当前 key；`senseaudio.singleKeyFallback`（默认 `switch`）下**仅在余额不足（402）时**自动切换到下一个可用 key 并经 `setActiveKeyByValue` 设为当前使用 + 右下角弹窗提示——401 无效 Key / 429 限流 / 503 繁忙等其他错误不切换、走 single 专属报错文案；`error` 下任何错误都直接报错不切换）。**被动检测**：**只配置 `senseaudio.errorRules` 一处**（四元组：code + message + statusCode + action，`src/keys/config.ts` 的 `getErrorRules`）。按数组顺序匹配，首个命中即生效：`code`（错误体 error.code 精确匹配，**主要匹配字段**）优先于 `statusCode`（HTTP 状态码兑底）；`message` 仅作可读性说明**不参与匹配**。`action` 与 key 状态一一对应：`retrySameKey` → 状态不变（不换 key，退避后重试同一个 key）、`rotateCooldown` → 冷却中（换 key，仅内存冷却，到期自动恢复）、`rotatePersist` → 不可用（换 key，持久化 available=false）。默认规则基于实测：封号（`code=billing`，400）→ 不可用；上游流中断（`code=upstream_stream_error`，400）→ 不换重试；余额不足（`code=INSUFFICIENT_BALANCE`，402）→ 不可用；限流（429/503）→ 冷却**手动检测**：`senseaudio.manageApiKeys` 命令 QuickPick 管理（增删/设为当前/绑定平台登录凭据/重置失效/检测可用性——最小真实聊天请求 `say ok`，实测余额不足时 402 拦截不耗 token）。**UI 增强**：表单式批量导入（三元组 key/凭据/备注，逐条输入）、检测二级界面（列出全部 key 状态 + "检测所有"选项）、编辑 API Key（三字段 value/凭据/label，冲突校验）、**轮询模式下隐藏"设为当前使用"**（★ Current / $(pinned) 固定标记与动作项在 single/sticky 模式显示，仅 rotation 模式隐藏——rotation 按设计轮询）、批量导入时已存在 key 自动更新凭据不重复添加、**所有 key 管理界面（主界面 / 检测二级界面 / 删除·设当前·编辑·绑定·清除凭据的 key 选择界面）均显示账号余额**（key 绑定的平台登录凭据经 `getAccountInfoCached` TTL 缓存查询 `platform.senseaudio.cn/api/user/self`，余额按**账号**粒度、所有 key 共享：现金余额显示 `$(coin)/$(error) 充值 ¥X.XX`（> `minBalanceCny` 为 coin、≤ 为 error），代金券可用显示 `$(gift) 赠送 ¥Y.YY`（> 0 时显示，附 `（至 YYYY-MM-DD）` 最早到期日，本地时区格式化），查询失败显示 `$(warning) 余额未知`）。**全部 key 用尽时**：轮换循环跟踪每个 key 的失败原因，报错列出脱敏 key + 原因（如 `sk_****abcd: 服务端繁忙 (503)`），并区分"瞬态失败请稍后重试"（429/503）与"确定性失败请检测"（402/401）；`pickNextApiKey` 无可用 key 的兜底报错同样列出每个 key 的原因（`buildAllKeysUnavailableDetail`）。**瞬态自动重试**：全部 key 均因瞬态错误（默认 429/500/503，由 `errorRules` 的 `rotateCooldown` / `retrySameKey` 动作判定）失败时，按 `senseaudio.transientRetryTimes`（默认 3）自动重试整轮——指数退避等待（2s/4s/8s，上限 8s）且**重试前清空瞬态冷却**（`resetExhaustedKeys(secrets,false)`，否则冷却期间 `pickNextApiKey` 会跳过全部 key 使重试无效），重试次数用尽后才报错。**平台侧错误不换 key**：500 Internal Server Error 是平台问题而非 key 问题——它命中瞬态重试但**不**命中轮换状态码，因此**不标记 key、不换 key**，仅退避后重试同一个 key（日志 `key.transientRetrySameKey`）。**错误分类统一为 `errorRules` 四元组**（2026-10-09）：只配置 `senseaudio.errorRules` 一处（code + message + statusCode + action），`matchErrorRule` 按数组顺序匹配——`code`（错误体 error.code 精确匹配）优先于 `statusCode` 兜底，`message` 仅作说明；`action` 与 key 状态一一对应（`retrySameKey` 状态不变 / `rotateCooldown` 冷却中 / `rotatePersist` 不可用）。默认规则：封号（`code=billing`，400）→ 不可用；上游流中断（`code=upstream_stream_error`，400）→ 不换重试；余额不足（`code=INSUFFICIENT_BALANCE`，402）→ 不可用；限流（429/503）→ 冷却。旧版单 key `senseaudio.apiKey` 自动迁移。`/v1/models` 实测不校验余额（余额 < 0 也 200），模型列表/启动同步用任意有效 key 即可。**key 三元组不随 VS Code 设置同步（2026-10-07 确认）**：SecretStorage 数据被 VS Code Settings Sync 设计上排除（每台机器独立加密，永不同步）——换机器/重装后 key 列表为空；跨机器迁移走下方「云同步（GitHub Gist）」的 `senseaudio.syncPush` / `syncPull`，或手动批量导入重新录入 |
 | **多模型支持** | 内置 16 个模型定义，覆盖 6 大模型系列，统一通过推理强度选择器切换思考模式。支持自动模型发现：开启后从 API 获取模型列表，自动过滤不可用模型并发现新增模型 |
 | **自动模型发现** | 通过 `senseaudio.enableAutoModelDiscovery` 配置（默认开启）。启动时从 `/v1/models` 获取当前可用模型 ID 列表及能力标记（含 `supports_responses`），过滤内置模型列表（不可用模型自动隐藏）。新增模型元数据以 **`/v1/models` 完整元数据为主源**（`context_length` / `max_completion_tokens` / `supports_vision` / `supports_reasoning` / `supports_tools`），models.dev 仅提供友好名称与回退规格——**models.dev 未收录或拉取失败时不再降级为 128K 上下文 / 4096 输出兜底**（2026-09-03 修复：曾导致 glm-5.3-flash 等自动发现模型上下文显示缩水为 102K、4096 输出上限被推理耗尽后正文为空，Copilot Chat 报 "Sorry, no response was returned."）；两源均未知输出上限时不发送 `max_completion_tokens`（交由服务端默认值）。`thinkingMode` 从 `supports_reasoning` 推断（支持推理→switchable，不支持→always）。API 不可用时静默回退到全量内置列表。内存缓存（5 分钟 TTL）。**按 API 模式过滤**：模型列表还会按 `senseaudio.apiMode` 过滤——`auto`/`openai` 显示全部（所有模型均支持 OpenAI 格式），`anthropic` 仅显示 `supports_anthropic=true` 的模型，`responses` 仅显示 `supports_responses=true` 的模型；能力集合为空（API 探测失败）时回退显示全部。**动态刷新**：通过 `onDidChangeLanguageModelChatInformation` 事件（VS Code 1.125+），切换 `apiMode` / `enableAutoModelDiscovery` 设置时自动重新拉取模型列表并刷新选择器，**无需 reload 窗口** |
 | **启动模型同步** | 通过 `senseaudio.syncModelsOnStartup` 配置（默认开启）。每次 VS Code 打开时自动检查 API 是否有新模型，**每日最多同步一次**（`globalState` 记录上次同步日期）。同步结果以**一行日志**输出到「SenseAudio」输出通道（`models.sync` 标签，含状态/说明），**不写任何文件**（v1.7.0 起不再写工作区 `.copilot/model-sync-log.md`——该文件会污染用户仓库，见 issue #1）。无 API Key、API 不可用时记录失败事件且不标记为已同步（下次打开重试） |
@@ -40,8 +40,8 @@
 | **Token 计数** | 使用 `o200k_base` tiktoken 分词器精确统计 token 用量 |
 | **状态栏** | 实时显示当前会话 token 使用量、累计用量、缓存命中率 |
 | **原生 Token 指示器** | 始终启用，向 Copilot Chat 原生 Token 指示器报告 token 用量。通过发送 MIME 类型为 `usage` 的 `LanguageModelDataPart`（TextEncoder 编码 JSON）实现，无需自建状态栏。依赖 VS Code/Copilot Chat 1.116+ 对外部模型 `usage` data part 的识别 |
-| **高级 Token 指示器** | 可通过 `senseaudio.enableThirdPartyTokenIndicator` 配置（**默认关闭**）控制 VS Code 状态栏中的高级Token计数器。关闭后仅显示原生指示器（原生指示器始终上报）。**状态栏可见性由 `isStatusBarEnabled()` 决定 = 高级 Token 指示器 OR 套餐用量显示（`showUsageInStatusBar` / `showUsageInTooltip`）**——不能只用 `enableThirdPartyTokenIndicator` 把关，否则套餐用量功能将永远不可见。**状态栏常态化显示（2026-10-10 改版）**：启动即显示并保持常显，不再静默隐藏（`scheduleStatusBarHide` 保留为空操作兼容既有调用点） |
-| **套餐用量与余额显示** | 状态栏主文本（2026-10-10 改版）：**套餐额度内**（`billingMode=plan`）显示 `$(pulse) 65% 30% 12%`（5h/周/月三窗口百分比，空格分隔）；**用余额**（`billingMode=extra/free`，月度额度耗尽）显示 `$(pulse) ¥358.78`（现金+代金券**合计**，不再分开显示赠送）。区分依据：`isPlanExhausted`（只看月度额度窗口）。悬停提示**仅套餐用量区块**（2026-10-10 改版：累计 Token 的 ↑/↓ 箭头行已移除，VS Code 原生会话 Token 指示器已覆盖）——5h/周/月三窗口（`5H——0% (0 / 10,000 积分)`）+ 5h 重置倒计时 + 余额 + 计费模式说明。**两套计费规则严格区分**（官方文档 token-plan）：① **周期额度**（5h/周）是**限流窗口**，耗尽后等下一周期自动恢复、**不消耗余额**；② **套餐积分**（月度 `credit_30d_limit`）才是**订阅额度**，耗尽后走超额策略——`enable_extra_usage=true` 则按量计费（代金券→现金），否则**降级 Free 版**。三态 `billingMode`：`plan`/`extra`/`free`。数据源 `GET platform.senseaudio.cn/api/user/self`（Bearer 平台登录凭据 PASETO token，取自 key store 的 `ApiKeyEntry.credential`），TTL 缓存 + **失败保留旧快照**（静默降级）。后台轮询（`senseaudio.usageRefreshInterval` 默认 5 分钟）+ 点击状态栏强制刷新。配置：`showUsageInStatusBar`（默认开，关闭则主文本改显 Token 计数）、`showUsageInTooltip`（默认开）。**⚠️ 单位陷阱**：代金券积分 `1 元 = 1,000,000 积分`（`POINTS_PER_CNY`，2026-09-27 实测校正，曾误用 5000 导致 200 倍误差），与套餐积分**不是同一单位**。实现见 `src/balance/planUsage.ts`，设计/移植指南见 `docs/plan-usage-design.md` |
+| **状态栏常态化显示** | 状态栏由套餐用量显示驱动（`senseaudio.showUsage`），启动即显示并保持常显，不再静默隐藏（`scheduleStatusBarHide` 保留为空操作兼容既有调用点）。**状态栏可见性由 `isStatusBarEnabled()` 决定 = `showUsage`**。原生 Token 指示器始终上报（`reportNativeUsage`，与状态栏无关）。**2026-10-15 清理**：旧版 `senseaudio.enableThirdPartyTokenIndicator`（高级 Token 计数器）已删除（累计计数器已无显示位置）；`showUsageInStatusBar` / `showUsageInTooltip` 两个开关已合并为单一 `senseaudio.showUsage`（主文本 + 悬停提示统一控制） |
+| **套餐用量与余额显示** | 状态栏主文本：**套餐额度内**（`billingMode=plan`）显示 `$(pulse) 65%`（**5 小时窗口已用百分比**）；**用余额**（`billingMode=extra/free`，月度额度耗尽）显示 `$(pulse) ¥358.78`（现金+代金券**合计**，不再分开显示赠送）。区分依据：`isPlanExhausted`（只看月度额度窗口）。悬停提示**仅套餐用量区块**（2026-10-10 改版：累计 Token 的 ↑/↓ 箭头行已移除，VS Code 原生会话 Token 指示器已覆盖）——5h/周/月三窗口（`5H——0% (0 / 10,000 积分)`）+ 5h 重置倒计时 + 余额 + 计费模式说明。**两套计费规则严格区分**（官方文档 token-plan）：① **周期额度**（5h/周）是**限流窗口**，耗尽后等下一周期自动恢复、**不消耗余额**；② **套餐积分**（月度 `credit_30d_limit`）才是**订阅额度**，耗尽后走超额策略——`enable_extra_usage=true` 则按量计费（代金券→现金），否则**降级 Free 版**。三态 `billingMode`：`plan`/`extra`/`free`。数据源 `GET platform.senseaudio.cn/api/user/self`（Bearer 平台登录凭据 PASETO token，取自 key store 的 `ApiKeyEntry.credential`），TTL 缓存 + **失败保留旧快照**（静默降级）。后台轮询（`senseaudio.usageRefreshInterval` 默认 5 分钟）+ 点击状态栏强制刷新。配置：`showUsage`（默认开，关闭则隐藏状态栏）。**⚠️ 单位陷阱**：代金券积分 `1 元 = 1,000,000 积分`（`POINTS_PER_CNY`，2026-09-27 实测校正，曾误用 5000 导致 200 倍误差），与套餐积分**不是同一单位**。实现见 `src/balance/planUsage.ts`，设计/移植指南见 `docs/plan-usage-design.md` |
 | **Git 提交消息生成** | 一键生成 Conventional Commit 格式的 Git 提交消息，支持 `auto` 语言模式自动从历史提交检测语言 |
 | **多仓库支持** | 支持多根工作区 (multi-root) 中多个 Git 仓库的提交消息生成 |
 | **模型预设** | 支持通过 `senseaudio.modelPreset` 设置切换 temperature/top_p 预设（🎯 Precise/⚖️ Balanced/🔥 Creative），也支持手动自定义输入 |
@@ -215,7 +215,7 @@ provideLanguageModelChatResponse(model, messages, options, progress, token)
   │
   ├── 9c. **多 Key 轮换循环**（外层 while(true)，每轮选一个 key，`failedKeys` 跟踪各 key 失败原因）:
   │       ├── pickNextApiKey(secrets, apiKeyMode)
-  │       │   ├── sticky → 从轮询游标环形扫描第一个可用 key，游标钉住不前移（固定使用；失效后切下一个并钉住，不自动切回）
+  │       │   ├── sticky → 从当前钉住的 key（activeIndex）环形扫描第一个可用 key，命中后钉住（更新 activeIndex 并持久化；失效后切下一个并钉住，不自动切回）。用户可在管理界面手动「设为当前使用」指定钉住的 key
   │       │   ├── rotation → 从轮询游标环形扫描第一个可用 key，游标前移
   │       │   ├── single → active key；不可用且 singleKeyFallback=switch 且本轮 active key 命中 rotatePersist（shouldSingleKeyFallbackSwitch 判定）→ 降级 rotation 选下一个可用 key + setActiveKeyByValue 设为当前 + 成功后弹窗提示；rotateCooldown 不切换 → single 专属报错
   │       │   └── 全部不可用 → 报错列出脱敏 key+原因（buildAllKeysUnavailableDetail，如 `sk_****abcd: 服务端繁忙 (503)`）
@@ -503,7 +503,7 @@ src/
 │   ├── utils.ts                          # 通用工具函数
 │   └── versionManager.ts                 # 版本信息管理
 ├── ui/
-│   └── statusBar.ts                      # 状态栏管理（受 enableThirdPartyTokenIndicator 控制）
+│   └── statusBar.ts                      # 状态栏管理（套餐用量渲染 + 后台轮询）
 ├── cloud/
 │   ├── cloudSync.ts                      # 云同步（GitHub Gist）：推送/拉取/启动自动拉取
 │   └── syncPayload.ts                   # 纯函数：Gist payload 对比（无 VS Code 运行时依赖，便于 Node 回归测试）
@@ -605,7 +605,7 @@ test/                                     # 测试脚本（运行前需 npm run 
 | `keys/config.ts` | ~90 | 模式、**错误分类规则（`errorRules` 四元组：code + message + statusCode + action）**、冷却时长、重试次数配置读取 |
 | `keys/state.ts` | ~30 | 模块级可变状态：store 缓存、轮询游标、瞬态冷却表（独立成文件避免循环依赖） |
 | `keys/store.ts` | ~194 | SecretStorage 读写与旧版单 key 迁移、`addApiKey`/`addApiKeys`/`removeApiKey`/`setActiveKey`/`setKeyCredential`/`updateApiKey` |
-| `keys/selection.ts` | ~110 | `getPrimaryApiKey` / `pickNextApiKey`（rotation 前移 / sticky 钉住）/ `shouldSingleKeyFallbackSwitch` / `setActiveKeyByValue` |
+| `keys/selection.ts` | ~110 | `getPrimaryApiKey` / `pickNextApiKey`（rotation 前移游标 / sticky 钉住 activeIndex 并持久化）/ `shouldSingleKeyFallbackSwitch` / `setActiveKeyByValue` |
 | `keys/health.ts` | ~216 | 瞬态冷却（`getTransientExhaustedInfo`）、`isApiKeyEligible`、`matchErrorRule`（errorRules 四元组匹配）、`getKeyUnavailableReason`、`markApiKeyExhausted`（按 action 决定冷却/持久化）/`markApiKeyAvailable`/`updateKeyAvailability`/`resetExhaustedKeys`、`getKeyDisplayStatus` |
 | `keys/mask.ts` | ~18 | `maskApiKey` / `maskCredential` 脱敏 |
 | `balance/balanceCheck.ts` | ~21 | barrel：统一导出 `balance/` 下全部 API |
@@ -620,7 +620,7 @@ test/                                     # 测试脚本（运行前需 npm run 
 | `models/modelSync.ts` | ~83 | 启动模型同步：每日最多一次检查 API 新模型（`globalState` 记录日期），同步结果以一行日志输出到「SenseAudio」Output 通道（`models.sync` 标签），**不写文件**（v1.7.0 移除工作区 `.copilot/model-sync-log.md`，见 issue #1），无 Key/API 不可用记录失败且不标记已同步 |
 | `models/provideModel.ts` | ~280 | 模型信息提供函数（含自动发现）：**先读 `enableAutoModelDiscovery` 开关**（关闭则直接用内置列表）、过滤内置模型、从 API 和 models.dev 自动发现新增模型、按 apiMode 过滤 |
 | `commands/registerCommands.ts` | ~90 | 注册全部 7 条命令（manageApiKeys / openSettings / generateGitCommitMessage / abortGitCommitMessage / syncPush / syncPull / checkUsage）+ `onDidChangeConfiguration` 监听（apiMode / enableAutoModelDiscovery 变化时刷新模型列表） |
-| `commands/apiKeyManagerUi.ts` | ~171 | `showApiKeyManager()` 主入口：**仅渲染主菜单 + 分发动作**（增删/批量导入/设为当前（仅 single 模式）/绑定平台登录凭据/重置失效/检测可用性/编辑 key）；具体流程委托 `apiKeyFlows.ts`，展示委托 `apiKeyDisplay.ts` |
+| `commands/apiKeyManagerUi.ts` | ~171 | `showApiKeyManager()` 主入口：**仅渲染主菜单 + 分发动作**（增删/批量导入/设为当前（single/sticky 模式）/绑定平台登录凭据/重置失效/检测可用性/编辑 key）；具体流程委托 `apiKeyFlows.ts`，展示委托 `apiKeyDisplay.ts` |
 | `commands/apiKeyDisplay.ts` | ~138 | **key 展示辅助**（2026-09-28 新增，纯函数）：`formatBalanceDetailText`（余额格式化）、`fetchAccountInfo`（TTL 缓存查询）、`buildKeyDetailLine`（单 key 详情行）、`buildKeyQuickPickItems`（key 列表 QuickPick 项）。主界面 / key 选择界面 / 检测二级界面共用，展示逻辑只写一处 |
 | `commands/apiKeyFlows.ts` | ~470 | **key 管理交互流程**（2026-09-28 新增）：`KeyManagerContext` 接口 + `addKeyFlow` / `parseBatchImport` / `batchImportFlow`（`key---credential---备注;` 单行格式）/ `deleteKeysFlow`（多选 + 循环 + 返回）/ `pickKey` / `checkAvailabilityFlow` / `checkAllAvailabilityFlow` / `showCheckMenu` / `bindCredentialFlow` / `editKeyFlow` |
 | `commands/checkUsageCommand.ts` | ~60 | `checkUsageCommand()`：强制刷新套餐用量（绕过 TTL）并弹窗展示三窗口使用率 + 余额；区分未绑定凭据 / 401 失效 / 一般失败三种错误。仅绑定状态栏点击（命令面板隐藏） |
@@ -629,7 +629,7 @@ test/                                     # 测试脚本（运行前需 npm run 
 | `core/types.ts` | ~94 | `SenseAudioModelItem`, `ModelPreset`, `ModelsResponse`, `RetryConfig` 等类型 |
 | `core/utils.ts` | ~294 | 工具函数 (重试、角色映射、工具转换等) |
 | `core/versionManager.ts` | ~31 | 扩展版本信息 |
-| `ui/statusBar.ts` | ~330 | 状态栏创建、更新、累计计数器；**套餐用量渲染**（主文本 `5H 65%` / 额度耗尽改显余额、悬停提示三窗口+倒计时+余额+计费模式）、后台轮询（`startUsagePolling`/`refreshPlanUsage`）、`refreshPlanUsageNow`（点击状态栏/命令强制刷新）；`showTokenStatusBar()` 受 `senseaudio.enableThirdPartyTokenIndicator`（**默认关闭**）控制 |
+| `ui/statusBar.ts` | ~330 | 状态栏创建、更新；**套餐用量渲染**（主文本 `5H 65%` / 额度耗尽改显余额、悬停提示三窗口+倒计时+余额+计费模式）、后台轮询（`startUsagePolling`/`refreshPlanUsage`）、`refreshPlanUsageNow`（点击状态栏/命令强制刷新）；`showTokenStatusBar()` 受 `isStatusBarEnabled()`（`showUsage`）控制 |
 | `cloud/cloudSync.ts` | ~308 | 云同步（GitHub Gist）：`pushToCloud` / `pullFromCloud` / `autoPullOnStartup` / `registerCloudSyncAutoPush` |
 | `cloud/syncPayload.ts` | ~25 | 纯函数 `syncPayloadHasChanged`：比较本地/云端 Gist payload，供 Node 回归测试与云同步去重逻辑共用 |
 | `gitCommit/commitMessageGenerator.ts` | ~441 | Git 提交消息生成逻辑（多 key 轮换循环） |
@@ -691,7 +691,7 @@ test/                                     # 测试脚本（运行前需 npm run 
 ### 4.1b `src/commands/apiKeyManagerUi.ts`
 
 #### `showApiKeyManager(context: vscode.ExtensionContext): Promise<void>`
-多 Key 管理 QuickPick 主流程（`senseaudio.manageApiKeys` 命令）。**仅渲染主菜单 + 分发动作**：构造 `KeyManagerContext`（仅 `secrets`——平台登录凭据随 key 存在 SecretStorage 的 `ApiKeyEntry.credential`，不再单独存 globalState），循环渲染 key 列表（经 `buildKeyQuickPickItems`，脱敏显示 + 可用性/当前使用/固定使用/凭据绑定状态/账号余额）与动作项，直到用户取消。动作分发到 `apiKeyFlows.ts`：添加 Key（`addKeyFlow`）、批量导入（`batchImportFlow`）、删除 Key（`pickKey` + 二次确认 + `removeApiKey`）、设为当前使用（仅 single 模式渲染；`pickKey` + `setActiveKey`）、编辑 Key（`pickKey` + `editKeyFlow`）、重置失效状态（`resetExhaustedKeys(secrets, true)`）、检测可用性（`showCheckMenu`）、绑定/更新平台登录凭据（`pickKey` + `bindCredentialFlow`）、清除平台登录凭据（`pickKey` + `setKeyCredential(secrets, index, undefined)`）。
+多 Key 管理 QuickPick 主流程（`senseaudio.manageApiKeys` 命令）。**仅渲染主菜单 + 分发动作**：构造 `KeyManagerContext`（仅 `secrets`——平台登录凭据随 key 存在 SecretStorage 的 `ApiKeyEntry.credential`，不再单独存 globalState），循环渲染 key 列表（经 `buildKeyQuickPickItems`，脱敏显示 + 可用性/当前使用/固定使用/凭据绑定状态/账号余额）与动作项，直到用户取消。动作分发到 `apiKeyFlows.ts`：添加 Key（`addKeyFlow`）、批量导入（`batchImportFlow`）、删除 Key（`pickKey` + 二次确认 + `removeApiKey`）、设为当前使用（single/sticky 模式渲染，rotation 模式隐藏；`pickKey` + `setActiveKey`）、编辑 Key（`pickKey` + `editKeyFlow`）、重置失效状态（`resetExhaustedKeys(secrets, true)`）、检测可用性（`showCheckMenu`）、绑定/更新平台登录凭据（`pickKey` + `bindCredentialFlow`）、清除平台登录凭据（`pickKey` + `setKeyCredential(secrets, index, undefined)`）。
 
 ---
 
@@ -704,10 +704,10 @@ test/                                     # 测试脚本（运行前需 npm run 
 查询账号余额（TTL 缓存）。数据源为 key 绑定的平台登录凭据（PASETO token）查 `platform.senseaudio.cn/api/user/self`（`getAccountInfoCached`）。余额按**账号**粒度，所有 key 共享同一份凭据（优先当前使用 key，否则第一个绑定了凭据的 key）。无凭据或查询失败 → undefined（UI 显示"余额未知"）。
 
 #### `buildKeyDetailLine(entry, balanceText, options?): string`
-构建单个 key 的详情行（与主界面 `render()` 一致）：可用性状态（`$(check)` 可用 / `$(error)` 不可用 / `$(clock)` 冷却（含剩余秒数）/ `$(question)` 未检测）+ 账号余额 + `$(star)` 当前使用（仅 single 模式）+ `$(pinned)` 固定使用（仅 sticky 模式）+ 凭据绑定状态。主界面、key 选择界面、检测二级界面共用，展示逻辑只写一处。
+构建单个 key 的详情行（与主界面 `render()` 一致）：可用性状态（`$(check)` 可用 / `$(error)` 不可用 / `$(clock)` 冷却（含剩余秒数）/ `$(question)` 未检测）+ 账号余额 + `$(star)` 当前使用（single 模式，`activeIndex`）+ `$(pinned)` 固定使用（sticky 模式，`activeIndex`）+ 凭据绑定状态。主界面、key 选择界面、检测二级界面共用，展示逻辑只写一处。
 
 #### `buildKeyQuickPickItems(store, action): Promise<QuickPickItem[]>`
-构建 key 列表的 QuickPick 项（label + 详情行）。统一处理：账号余额查询（TTL 缓存）、模式判定（single/sticky 的当前/固定标记）、逐 key 详情行（`buildKeyDetailLine`）。主界面 `render()`、key 选择界面 `pickKey()`、检测二级界面 `showCheckMenu()` 共用。
+构建 key 列表的 QuickPick 项（label + 详情行）。统一处理：账号余额查询（TTL 缓存）、模式判定（single/sticky 的当前/固定标记均基于 `activeIndex`）、逐 key 详情行（`buildKeyDetailLine`）。主界面 `render()`、key 选择界面 `pickKey()`、检测二级界面 `showCheckMenu()` 共用。
 
 ---
 
@@ -837,16 +837,16 @@ OpenAI 格式轮次：assistant `tool_calls` + `tool` role 消息；DeepSeek 兼
 `ApiKeyEntry` / `ApiKeyStore` / `ApiKeyMode` / `SingleKeyFallback` / `KeyDisplayStatus` 类型定义。
 
 #### `keys/config.ts`
-`getApiKeyMode` / `getRotationCursorIndex` / `getSingleKeyFallback` / `getErrorRules`（errorRules 四元组）/ `getExhaustedCooldownMin` / `getTransientRetryTimes`。
+`getApiKeyMode` / `getSingleKeyFallback` / `getErrorRules`（errorRules 四元组）/ `getExhaustedCooldownMin` / `getTransientRetryTimes`。
 
 #### `keys/state.ts`
 模块级可变状态（独立成文件避免循环依赖）：`STORE_KEY` / `LEGACY_KEY` 常量、`getStoreCache`/`setStoreCache`、`getRotationIndex`/`setRotationIndex`、`getTransientExhaustedMap`。
 
 #### `keys/store.ts`
-`getApiKeyStore`（含旧版单 key 迁移与 JSON 损坏修复；**读取时兼容旧字段名 `cookie`**，自动映射到 `credential`）/ `saveApiKeyStore` / `invalidateApiKeyStoreCache` / `addApiKey` / `addApiKeys` / `removeApiKey`（**同步清理被删 key 的瞬态冷却条目**，避免内存残留与同 value 新 key 继承旧冷却）/ `setActiveKey` / `setKeyCredential` / `updateApiKey`。
+`getApiKeyStore`（含旧版单 key 迁移与 JSON 损坏修复；**读取时兼容旧字段名 `cookie`**，自动映射到 `credential`）/ `saveApiKeyStore` / `invalidateApiKeyStoreCache` / `addApiKey` / `addApiKeys` / `removeApiKey`（**同步清理被删 key 的瞬态冷却条目**，避免内存残留与同 value 新 key 继承旧冷却）/ `setActiveKey`（设置当前使用的 key：single 模式的 active key / sticky 模式钉住的 key）/ `setKeyCredential` / `updateApiKey`。
 
 #### `keys/selection.ts`
-`getPrimaryApiKey` / `pickNextApiKey`（rotation 前移游标 / sticky 钉住游标）/ `shouldSingleKeyFallbackSwitch` / `setActiveKeyByValue` / `pickAccountCredential`（从 store 选取账号级平台登录凭据：优先当前使用 key，否则第一个绑定了凭据的 key）/ `getAccountCredential`（异步便捷封装）。
+`getPrimaryApiKey` / `pickNextApiKey`（rotation 前移游标 / sticky 钉住 activeIndex 并持久化）/ `shouldSingleKeyFallbackSwitch` / `setActiveKeyByValue` / `pickAccountCredential`（从 store 选取账号级平台登录凭据：优先当前使用 key，否则第一个绑定了凭据的 key）/ `getAccountCredential`（异步便捷封装）。
 
 #### `keys/health.ts`
 `getTransientExhaustedInfo` / `isApiKeyEligible` / `hasTransientExhaustedKey` / `matchErrorRule`（匹配 `errorRules` 四元组：code 精确匹配优先于 statusCode 兑底，返回 `ErrorRule`）/ `getKeyUnavailableReason` / `markApiKeyExhausted`（**按 `action` 决定处置**：`rotateCooldown` 仅冷却 / `rotatePersist` 持久化 available=false）/ `markApiKeyAvailable` / `updateKeyAvailability` / `resetExhaustedKeys` / `getKeyDisplayStatus`。
@@ -1252,7 +1252,7 @@ API 实现的抽象基类。
 将 VS Code 工具定义转换为 OpenAI 函数工具定义。
 
 #### `createRetryConfig(): RetryConfig`
-从 VS Code 设置中读取 **HTTP 层**重试配置（`senseaudio.retry.enabled` / `maxAttempts` / `intervalMs` / `statusCodes`）。默认 `maxAttempts=2`、`intervalMs=1000`、`statusCodes=[]`（额外状态码，叠加在内置的 `[502, 504]` 之上）。与整轮层重试（`senseaudio.transientRetry*`）职责分离，详见「重试机制」。
+从 VS Code 设置中读取 **HTTP 层**重试配置（`senseaudio.retry.enabled` / `maxAttempts` / `intervalMs`）。默认 `maxAttempts=2`、`intervalMs=1000`；可重试状态码固定为内置的 `[502, 504]`（网关错误）。与整轮层重试（`senseaudio.transientRetry*`）职责分离，详见「重试机制」。
 
 #### `executeWithRetry<T>(fn, retryConfig): Promise<T>`
 使用指数退避策略执行可重试的异步操作（HTTP 层）。内置可重试状态码仅 `[502, 504]`（网关错误）——429/500/503 刻意**不**在此层重试，交由整轮层处理，避免两层相乘导致长时间挂起。
@@ -1370,13 +1370,13 @@ ask_image 工具定义的 OpenAI 格式（`type: "function"`），包含 `imageI
 ### 4.15 `src/ui/statusBar.ts`
 
 #### `initStatusBar(context, getCredential?): vscode.StatusBarItem`
-创建状态栏条目并重置累计计数器。主文本初始为 `$(pulse) --`，`command` 设为 `senseaudio.checkUsage`（点击即刷新套餐用量）。传入 `getCredential`（`() => Promise<string | undefined>`，从 key store 取账号级平台登录凭据）时启动套餐用量后台轮询（`startUsagePolling`），并注册配置变化监听（`showUsageInTooltip` / `showUsageInStatusBar` / `usageRefreshInterval` 变化时重启轮询并重渲染）。**启动时不显示**（保持隐藏），仅在用户实际使用本插件模型时才显示。
+创建状态栏条目。主文本初始为 `$(pulse) --`，`command` 设为 `senseaudio.checkUsage`（点击即刷新套餐用量）。传入 `getCredential`（`() => Promise<string | undefined>`，从 key store 取账号级平台登录凭据）时启动套餐用量后台轮询（`startUsagePolling`），并注册配置变化监听（`showUsage` / `usageRefreshInterval` 变化时重启轮询并重渲染）。**启动即显示并保持常显**（2026-10-10 改版）。
 
 #### `showTokenStatusBar(statusBarItem): void`
-显示状态栏并取消待执行的自动隐藏定时器。在 `provideLanguageModelChatResponse` 发起请求时调用。`isStatusBarEnabled()` 为 false（高级 Token 指示器与套餐用量显示均关闭）时直接隐藏。
+显示状态栏并取消待执行的自动隐藏定时器。在 `provideLanguageModelChatResponse` 发起请求时调用。`isStatusBarEnabled()` 为 false（套餐用量主文本与 tooltip 均关闭）时直接隐藏。
 
 #### `isStatusBarEnabled(): boolean`（模块级私有）
-状态栏可见性总开关 = `enableThirdPartyTokenIndicator` OR `showUsageInStatusBar` OR `showUsageInTooltip`。**不可只用 `enableThirdPartyTokenIndicator` 把关**（默认 false，会导致套餐用量永远不可见）。
+状态栏可见性总开关 = `showUsage`。
 
 #### `scheduleStatusBarHide(statusBarItem, delayMs?): void`
 **2026-10-10 改版：空操作**——状态栏常态化显示，不再自动隐藏。保留函数签名兼容既有调用点（provider.ts 的 finally），后续可移除。
@@ -1384,29 +1384,14 @@ ask_image 工具定义的 OpenAI 格式（`type: "function"`），包含 `imageI
 #### `refreshPlanUsageNow(): Promise<PlanUsageSnapshot | null>`
 强制立即刷新套餐用量（`senseaudio.checkUsage` 命令与点击状态栏使用）：`getPlanUsageCached(token, true)` 绕过 TTL 强制拉取，完成后重渲染主文本与 tooltip 并返回快照。无凭据时返回 null。**并发保护**：后台刷新在途时（`usageRefreshInFlight`）不重复发起，直接返回当前缓存快照（`getPlanUsageSnapshot()`），避免穿透 in-flight 标志形成并发请求。
 
-#### `formatTokenCount(value): string`
-格式化 Token 数为人类可读格式 (K/M/B)。
+#### `updateContextStatusBar(messages, tools, statusBarItem, modelConfig): Promise<number>`
+刷新状态栏（套餐用量主文本 + tooltip）。返回估算输入 Token 数（供 fallback usage 上报）。
 
-#### `createProgressBar(usedTokens, maxTokens): string`
-创建视觉进度条（使用 Unicode 块字符 ▁▂▃▄▅▆▇█）。
-
-#### `updateContextStatusBar(messages, tools, model, statusBarItem, modelConfig): Promise<number>`
-更新状态栏：`showUsageInStatusBar` 开启时主文本交给套餐用量（`updateStatusBarUsageText`），否则显示 Token 用量与进度条；tooltip 始终显示累计 Token。新对话时重置累计计数器。返回估算输入 Token 数（供 fallback usage）。
-
-#### `updateStatusBarWithApiPrompt(apiPromptTokens, maxTokens, statusBarItem): void`
-API 返回用量数据后重渲染状态栏。`showUsageInStatusBar` 开启时**不改主文本**（套餐用量占位），仅刷新 tooltip。
-
-#### `resetCumulativeCounters(): void`
-重置所有累计 Token 计数器（VS Code 启动和新对话时调用）。
-
-#### `recordUsage(usage: StreamUsage): void`
-将流式用量累计到全局计数器。
-
-#### `updateCumulativeTooltip(statusBarItem): void`
+#### `updateStatusBarTooltip(statusBarItem): void`（模块级私有）
 更新状态栏工具提示（2026-10-10 改版）：**仅套餐用量区块**（三窗口 + 5h 重置倒计时 + 余额 + 计费模式说明）。累计 Token 部分（↑/↓ 箭头行）已移除——VS Code 原生会话 Token 指示器已覆盖该信息。
 
 #### `updateStatusBarUsageText(statusBarItem): void`（模块级私有）
-渲染状态栏主文本（2026-10-10 改版）：套餐额度内 `$(pulse) 65% 30% 12%`（5h/周/月三窗口百分比，空格分隔）/ 用余额（月度额度耗尽）`$(pulse) ¥358.78`（现金+代金券合计）/ 无数据 `$(pulse) --`。`showUsageInStatusBar` 关闭时恢复 Token 计数文本。
+渲染状态栏主文本：套餐额度内 `$(pulse) 65%`（**5 小时窗口已用百分比**）/ 用余额（月度额度耗尽）`$(pulse) ¥358.78`（现金+代金券合计）/ 无数据 `$(pulse) --`。
 
 #### `appendPlanUsageTooltipLines(lines): void`（模块级私有）
 将套餐用量区块追加到 tooltip 行数组：配置关闭或无缓存时直接返回；每个窗口一行（`5H——0% (0 / 10,000 积分)`）+ 5h 重置倒计时行 + 余额行 + 计费模式说明行。
@@ -1417,8 +1402,8 @@ API 返回用量数据后重渲染状态栏。`showUsageInStatusBar` 开启时**
 #### `startUsagePolling() / stopUsagePolling(): void`（模块级私有）
 启动/停止轮询定时器。`startUsagePolling` 先停旧定时器，立即触发一次刷新后按 `usageRefreshInterval`（夹取 1-60 分钟）定时刷新，输出 `planUsage.poll.start`/`planUsage.poll.stop`（debug）。
 
-#### `isUsageInStatusBarEnabled() / isUsageTooltipEnabled() / getUsageRefreshIntervalMs(): boolean | number`（模块级私有）
-读取 `senseaudio.showUsageInStatusBar`（默认 true）/ `senseaudio.showUsageInTooltip`（默认 true）/ `senseaudio.usageRefreshInterval`（默认 5 分钟，夹取 1-60）。
+#### `isUsageEnabled() / getUsageRefreshIntervalMs(): boolean | number`（模块级私有）
+读取 `senseaudio.showUsage`（默认 true）/ `senseaudio.usageRefreshInterval`（默认 5 分钟，夹取 1-60）。
 
 ---
 

@@ -20,6 +20,27 @@ export class VisionRoundError extends Error {
 }
 
 /**
+ * 瞬态错误（500/429/503）同 key 重试次数用尽后的友好错误。
+ *
+ * 原始错误（如 "API error: [500] Internal Server Error {...}"）对用户过于原始，
+ * 包装为友好文案并保留原始错误信息作为后缀。`rotation.ts` 在
+ * `retrySameKey` 分支重试耗尽时抛出此错误。
+ */
+export class TransientRetryExhaustedError extends Error {
+    constructor(originalError: unknown, attempts: number) {
+        const raw = originalError instanceof Error ? originalError.message : String(originalError);
+        super(
+            l10nFormat(
+                "The server is busy or rate-limited. Retried {0} time(s) automatically without success. Please try again later.\n\nOriginal error: {1}",
+                attempts,
+                raw
+            )
+        );
+        this.name = "TransientRetryExhaustedError";
+    }
+}
+
+/**
  * Detect a finished stream that exhausted its token budget (finish/stop reason
  * "length" or "max_tokens") without producing any answer text. This happens
  * with reasoning models when thinking consumes the whole max_tokens budget
@@ -104,8 +125,7 @@ export async function tryTransientRetryRound(
  * part and displays it in the native UI element, just like GitHub Copilot's own
  * models do.
  *
- * This is always active. The separate Advanced Token indicator can be
- * controlled via the "senseaudio.enableThirdPartyTokenIndicator" setting.
+ * This is always active.
  */
 export function reportNativeUsage(
     usage: StreamUsage,

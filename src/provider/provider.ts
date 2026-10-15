@@ -22,9 +22,6 @@ import { l10n, l10nFormat } from "../core/localize";
 import { countMessageTokens, textTokenLength } from "../tokenizer/provideToken";
 import {
     updateContextStatusBar,
-    recordUsage,
-    updateCumulativeTooltip,
-    updateStatusBarWithApiPrompt,
     showTokenStatusBar,
     scheduleStatusBarHide,
 } from "../ui/statusBar";
@@ -213,17 +210,12 @@ export class SenseAudioChatModelProvider implements LanguageModelChatProvider {
                 vision: um?.vision ?? false,
             };
 
-            // Read Advanced Token indicator setting (default off — the native
-            // Copilot indicator is always reported; this only controls the
-            // extension's own status-bar counter)
-            const enableThirdPartyIndicator = config.get<boolean>("senseaudio.enableThirdPartyTokenIndicator", false);
-
-            // Calculate client-side token estimate for fallback (also updates Advanced Token indicator if enabled)
+            // Calculate client-side token estimate for fallback (also updates the status bar)
             // Show the status bar — this request is using one of this extension's models.
             // (It stays hidden on startup and while other chat model providers are in use.)
             showTokenStatusBar(this.statusBarItem);
 
-            const estimatedInputTokens = await updateContextStatusBar(messages, options.tools, model, this.statusBarItem, modelConfig);
+            const estimatedInputTokens = await updateContextStatusBar(messages, options.tools, this.statusBarItem, modelConfig);
 
             // Apply delay between consecutive requests
             const modelDelay = um?.delay;
@@ -307,12 +299,6 @@ export class SenseAudioChatModelProvider implements LanguageModelChatProvider {
                             usageReportedDuringStream = true;
                             // Always report to native Copilot indicator (use original progress, not trackingProgress wrapper)
                             reportNativeUsage(usage, progress);
-                            // Conditionally update Advanced Token indicator
-                            if (enableThirdPartyIndicator) {
-                                recordUsage(usage);
-                                updateCumulativeTooltip(this.statusBarItem);
-                                updateStatusBarWithApiPrompt(usage.promptTokens, model.maxInputTokens || 128000, this.statusBarItem);
-                            }
                         },
                     });
                 },
@@ -327,10 +313,6 @@ export class SenseAudioChatModelProvider implements LanguageModelChatProvider {
                     completionTokens: estimatedOutputTokens,
                 };
                 reportNativeUsage(fallbackUsage, progress);
-                if (enableThirdPartyIndicator) {
-                    recordUsage(fallbackUsage);
-                    updateCumulativeTooltip(this.statusBarItem);
-                }
             }
         } catch (err) {
             // Determine if the request was aborted/terminated (friendly message instead of raw error)

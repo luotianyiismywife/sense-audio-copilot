@@ -10,7 +10,6 @@ import { l10n, l10nFormat } from "../core/localize";
 import {
     getApiKeyMode,
     getKeyDisplayStatus,
-    getRotationCursorIndex,
     getTransientExhaustedInfo,
     maskApiKey,
     pickAccountCredential,
@@ -124,15 +123,15 @@ export async function buildKeyQuickPickItems(
         ? formatBalanceDetailText(accountInfo, getMinBalanceCny())
         : `$(warning) ${l10n("Balance unknown")}`;
     // Current/pinned markers follow the same mode rules as the main interface.
+    // Both single and sticky modes pin the key at `activeIndex` (persisted).
     const keyMode = getApiKeyMode();
     const isSingleMode = keyMode === "single";
     const isStickyMode = keyMode === "sticky";
-    const stickyCursor = isStickyMode ? getRotationCursorIndex() : -1;
     return store.keys.map((entry, i) => ({
         label: `${maskApiKey(entry.value)}${entry.label ? ` (${entry.label})` : ""}`,
         description: buildKeyDetailLine(entry, balanceText, {
             isActive: isSingleMode && i === store.activeIndex,
-            isPinned: isStickyMode && i === stickyCursor,
+            isPinned: isStickyMode && i === store.activeIndex,
         }),
         action,
         index: i,

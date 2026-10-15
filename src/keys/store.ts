@@ -215,7 +215,7 @@ export async function removeApiKey(secrets: vscode.SecretStorage, index: number)
     await saveApiKeyStore(secrets, store);
 }
 
-/** 设置 single 模式的当前 key */
+/** 设置当前使用的 key（single 模式的 active key / sticky 模式钉住的 key） */
 export async function setActiveKey(secrets: vscode.SecretStorage, index: number): Promise<void> {
     const store = await getApiKeyStore(secrets);
     if (index < 0 || index >= store.keys.length) {

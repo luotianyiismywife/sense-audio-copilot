@@ -16,7 +16,6 @@ export type { ErrorAction, ErrorRule } from "./config";
 
 export {
     getApiKeyMode,
-    getRotationCursorIndex,
     getSingleKeyFallback,
     getErrorRules,
     getExhaustedCooldownMin,
